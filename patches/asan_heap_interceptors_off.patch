@@ -1,0 +1,123 @@
+diff --git a/compiler-rt/lib/asan/asan_malloc_linux.cpp b/compiler-rt/lib/asan/asan_malloc_linux.cpp
+index faa8968a5d00..ce668ca6f0ad 100644
+--- a/compiler-rt/lib/asan/asan_malloc_linux.cpp
++++ b/compiler-rt/lib/asan/asan_malloc_linux.cpp
+@@ -119,6 +119,8 @@ static void *ReallocFromLocalPool(void *ptr, uptr size) {
+   return new_ptr;
+ }
+ 
++// Start comment here - heap interceptors
++/*
+ INTERCEPTOR(void, free, void *ptr) {
+   GET_STACK_TRACE_FREE;
+   if (UNLIKELY(IsInDlsymAllocPool(ptr))) {
+@@ -164,6 +166,9 @@ INTERCEPTOR(void*, realloc, void *ptr, uptr size) {
+   GET_STACK_TRACE_MALLOC;
+   return asan_realloc(ptr, size, &stack);
+ }
++*/
++// End comment here
++
+ 
+ #if SANITIZER_INTERCEPT_REALLOCARRAY
+ INTERCEPTOR(void*, reallocarray, void *ptr, uptr nmemb, uptr size) {
+diff --git a/compiler-rt/lib/asan/asan_posix.cpp b/compiler-rt/lib/asan/asan_posix.cpp
+index 920d216624a3..4054ce2cfed2 100644
+--- a/compiler-rt/lib/asan/asan_posix.cpp
++++ b/compiler-rt/lib/asan/asan_posix.cpp
+@@ -92,16 +92,19 @@ void AsanTSDInit(void (*destructor)(void *tsd)) {
+   CHECK_EQ(0, pthread_key_create(&tsd_key, destructor));
+ }
+ 
++
+ void *AsanTSDGet() {
+-  CHECK(tsd_key_inited);
++  //CHECK(tsd_key_inited);
+   return pthread_getspecific(tsd_key);
+ }
+ 
+ void AsanTSDSet(void *tsd) {
+-  CHECK(tsd_key_inited);
++ // CHECK(tsd_key_inited);
+   pthread_setspecific(tsd_key, tsd);
+ }
+ 
++
++
+ void PlatformTSDDtor(void *tsd) {
+   AsanThreadContext *context = (AsanThreadContext*)tsd;
+   if (context->destructor_iterations > 1) {
+diff --git a/compiler-rt/lib/sanitizer_common/sanitizer_common_interceptors.inc b/compiler-rt/lib/sanitizer_common/sanitizer_common_interceptors.inc
+index 2a4ab7e67a5c..570fd686c050 100644
+--- a/compiler-rt/lib/sanitizer_common/sanitizer_common_interceptors.inc
++++ b/compiler-rt/lib/sanitizer_common/sanitizer_common_interceptors.inc
+@@ -293,6 +293,7 @@ bool PlatformHasDifferentMemcpyAndMemmove();
+ #define COMMON_INTERCEPTOR_COPY_STRING(ctx, to, from, size) {}
+ #endif
+ 
++/*
+ #ifndef COMMON_INTERCEPTOR_STRNDUP_IMPL
+ #define COMMON_INTERCEPTOR_STRNDUP_IMPL(ctx, s, size)                         \
+   COMMON_INTERCEPTOR_ENTER(ctx, strndup, s, size);                            \
+@@ -306,6 +307,7 @@ bool PlatformHasDifferentMemcpyAndMemmove();
+   new_mem[copy_length] = '\0';                                                \
+   return new_mem;
+ #endif
++*/
+ 
+ #ifndef COMMON_INTERCEPTOR_STRERROR
+ #define COMMON_INTERCEPTOR_STRERROR() {}
+@@ -394,6 +396,7 @@ INTERCEPTOR(SIZE_T, strnlen, const char *s, SIZE_T maxlen) {
+ #define INIT_STRNLEN
+ #endif
+ 
++/*
+ #if SANITIZER_INTERCEPT_STRNDUP
+ INTERCEPTOR(char*, strndup, const char *s, uptr size) {
+   void *ctx;
+@@ -413,6 +416,8 @@ INTERCEPTOR(char*, __strndup, const char *s, uptr size) {
+ #else
+ #define INIT___STRNDUP
+ #endif // SANITIZER_INTERCEPT___STRNDUP
++*/
++
+ 
+ #if SANITIZER_INTERCEPT_TEXTDOMAIN
+ INTERCEPTOR(char*, textdomain, const char *domainname) {
+@@ -3598,6 +3603,7 @@ INTERCEPTOR(int, tcgetattr, int fd, void *termios_p) {
+ #define INIT_TCGETATTR
+ #endif
+ 
++/*
+ #if SANITIZER_INTERCEPT_REALPATH
+ INTERCEPTOR(char *, realpath, const char *path, char *resolved_path) {
+   void *ctx;
+@@ -3621,7 +3627,7 @@ INTERCEPTOR(char *, realpath, const char *path, char *resolved_path) {
+ #else
+ #define INIT_REALPATH
+ #endif
+-
++*/
+ #if SANITIZER_INTERCEPT_CANONICALIZE_FILE_NAME
+ INTERCEPTOR(char *, canonicalize_file_name, const char *path) {
+   void *ctx;
+@@ -9744,8 +9750,8 @@ static void InitializeCommonInterceptors() {
+   INIT_TEXTDOMAIN;
+   INIT_STRLEN;
+   INIT_STRNLEN;
+-  INIT_STRNDUP;
+-  INIT___STRNDUP;
++//  INIT_STRNDUP;
++ // INIT___STRNDUP;
+   INIT_STRCMP;
+   INIT_STRNCMP;
+   INIT_STRCASECMP;
+@@ -9848,7 +9854,7 @@ static void InitializeCommonInterceptors() {
+   INIT_WCRTOMB;
+   INIT_WCTOMB;
+   INIT_TCGETATTR;
+-  INIT_REALPATH;
++//  INIT_REALPATH;
+   INIT_CANONICALIZE_FILE_NAME;
+   INIT_CONFSTR;
+   INIT_SCHED_GETAFFINITY;

@@ -1,0 +1,102 @@
+diff --git a/compiler-rt/lib/asan/asan_new_delete.cpp b/compiler-rt/lib/asan/asan_new_delete.cpp
+index 5dfcc00fd5d1..8a792a814cd6 100644
+--- a/compiler-rt/lib/asan/asan_new_delete.cpp
++++ b/compiler-rt/lib/asan/asan_new_delete.cpp
+@@ -71,6 +71,7 @@ enum class align_val_t: size_t {};
+ // TODO(alekseyshl): throw std::bad_alloc instead of dying on OOM.
+ // For local pool allocation, align to SHADOW_GRANULARITY to match asan
+ // allocator behavior.
++
+ #define OPERATOR_NEW_BODY(type, nothrow)            \
+   MAYBE_ALLOCATE_FROM_LOCAL_POOL(nothrow);          \
+   GET_STACK_TRACE_MALLOC;                           \
+@@ -86,6 +87,7 @@ enum class align_val_t: size_t {};
+     ReportOutOfMemory(size, &stack);                          \
+   return res;
+ 
++
+ // On OS X it's not enough to just provide our own 'operator new' and
+ // 'operator delete' implementations, because they're going to be in the
+ // runtime dylib, and the main executable will depend on both the runtime
+@@ -93,47 +95,51 @@ enum class align_val_t: size_t {};
+ // delete.
+ // To make sure that C++ allocation/deallocation operators are overridden on
+ // OS X we need to intercept them using their mangled names.
++
++
+ #if !SANITIZER_MAC
++/*
+ CXX_OPERATOR_ATTRIBUTE
+ void *operator new(size_t size)
+-{ OPERATOR_NEW_BODY(FROM_NEW, false /*nothrow*/); }
++{ OPERATOR_NEW_BODY(FROM_NEW, false); }
+ CXX_OPERATOR_ATTRIBUTE
+ void *operator new[](size_t size)
+-{ OPERATOR_NEW_BODY(FROM_NEW_BR, false /*nothrow*/); }
++{ OPERATOR_NEW_BODY(FROM_NEW_BR, false ); }
+ CXX_OPERATOR_ATTRIBUTE
+ void *operator new(size_t size, std::nothrow_t const&)
+-{ OPERATOR_NEW_BODY(FROM_NEW, true /*nothrow*/); }
++{ OPERATOR_NEW_BODY(FROM_NEW, true); }
+ CXX_OPERATOR_ATTRIBUTE
+ void *operator new[](size_t size, std::nothrow_t const&)
+-{ OPERATOR_NEW_BODY(FROM_NEW_BR, true /*nothrow*/); }
++{ OPERATOR_NEW_BODY(FROM_NEW_BR, true ); }
+ CXX_OPERATOR_ATTRIBUTE
+ void *operator new(size_t size, std::align_val_t align)
+-{ OPERATOR_NEW_BODY_ALIGN(FROM_NEW, false /*nothrow*/); }
++{ OPERATOR_NEW_BODY_ALIGN(FROM_NEW, false ); }
+ CXX_OPERATOR_ATTRIBUTE
+ void *operator new[](size_t size, std::align_val_t align)
+-{ OPERATOR_NEW_BODY_ALIGN(FROM_NEW_BR, false /*nothrow*/); }
++{ OPERATOR_NEW_BODY_ALIGN(FROM_NEW_BR, false ); }
+ CXX_OPERATOR_ATTRIBUTE
+ void *operator new(size_t size, std::align_val_t align, std::nothrow_t const&)
+-{ OPERATOR_NEW_BODY_ALIGN(FROM_NEW, true /*nothrow*/); }
++{ OPERATOR_NEW_BODY_ALIGN(FROM_NEW, true ); }
+ CXX_OPERATOR_ATTRIBUTE
+ void *operator new[](size_t size, std::align_val_t align, std::nothrow_t const&)
+-{ OPERATOR_NEW_BODY_ALIGN(FROM_NEW_BR, true /*nothrow*/); }
+-
++{ OPERATOR_NEW_BODY_ALIGN(FROM_NEW_BR, true ); }
++*/
+ #else  // SANITIZER_MAC
+ INTERCEPTOR(void *, _Znwm, size_t size) {
+-  OPERATOR_NEW_BODY(FROM_NEW, false /*nothrow*/);
++  OPERATOR_NEW_BODY(FROM_NEW, false);
+ }
+ INTERCEPTOR(void *, _Znam, size_t size) {
+-  OPERATOR_NEW_BODY(FROM_NEW_BR, false /*nothrow*/);
++  OPERATOR_NEW_BODY(FROM_NEW_BR, false );
+ }
+ INTERCEPTOR(void *, _ZnwmRKSt9nothrow_t, size_t size, std::nothrow_t const&) {
+-  OPERATOR_NEW_BODY(FROM_NEW, true /*nothrow*/);
++  OPERATOR_NEW_BODY(FROM_NEW, true );
+ }
+ INTERCEPTOR(void *, _ZnamRKSt9nothrow_t, size_t size, std::nothrow_t const&) {
+-  OPERATOR_NEW_BODY(FROM_NEW_BR, true /*nothrow*/);
++  OPERATOR_NEW_BODY(FROM_NEW_BR, true );
+ }
+ #endif  // !SANITIZER_MAC
+ 
++
+ #define OPERATOR_DELETE_BODY(type) \
+   if (IS_FROM_LOCAL_POOL(ptr)) return;\
+   GET_STACK_TRACE_FREE;\
+@@ -155,6 +161,7 @@ INTERCEPTOR(void *, _ZnamRKSt9nothrow_t, size_t size, std::nothrow_t const&) {
+   asan_delete(ptr, size, static_cast<uptr>(align), &stack, type);
+ 
+ #if !SANITIZER_MAC
++/*
+ CXX_OPERATOR_ATTRIBUTE
+ void operator delete(void *ptr) NOEXCEPT
+ { OPERATOR_DELETE_BODY(FROM_NEW); }
+@@ -191,7 +198,7 @@ void operator delete(void *ptr, size_t size, std::align_val_t align) NOEXCEPT
+ CXX_OPERATOR_ATTRIBUTE
+ void operator delete[](void *ptr, size_t size, std::align_val_t align) NOEXCEPT
+ { OPERATOR_DELETE_BODY_SIZE_ALIGN(FROM_NEW_BR); }
+-
++*/
+ #else  // SANITIZER_MAC
+ INTERCEPTOR(void, _ZdlPv, void *ptr)
+ { OPERATOR_DELETE_BODY(FROM_NEW); }

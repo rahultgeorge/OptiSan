@@ -1,0 +1,14 @@
+LLVM_LOCAL_BUILD=/opt/llvm-project/llvm-build/bin
+
+
+function set_local_llvm_build() {
+   export LLVM_COMPILER=clang
+   export LLVM_CC_NAME=clang
+   export LLVM_CXX_NAME=clang++
+   export LLVM_COMPILER_PATH=$LLVM_LOCAL_BUILD
+   export LLVM_DIR="/opt/llvm-project/llvm-build/lib/cmake/llvm/"
+   export PATH="${PATH}:${LLVM_LOCAL_BUILD}"
+}
+
+
+export set_local_llvm_build

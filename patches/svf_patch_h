@@ -1,0 +1,1692 @@
+diff --git a/include/DDA/DDAPass.h b/include/DDA/DDAPass.h
+index df968ee4..3d01e638 100644
+--- a/include/DDA/DDAPass.h
++++ b/include/DDA/DDAPass.h
+@@ -7,8 +7,8 @@
+  */
+ 
+ 
+-#ifndef DDAPASS_H_
+-#define DDAPASS_H_
++#ifndef WPA_H_
++#define WPA_H_
+ 
+ #include "MemoryModel/PointerAnalysisImpl.h"
+ #include "DDA/DDAClient.h"
+diff --git a/include/DDA/DDAVFSolver.h b/include/DDA/DDAVFSolver.h
+index c3314674..2423b8da 100644
+--- a/include/DDA/DDAVFSolver.h
++++ b/include/DDA/DDAVFSolver.h
+@@ -367,7 +367,7 @@ protected:
+         const SVFGNode* loadSrc = getDefSVFGNode(load->getPAGSrcNode());
+         DBOUT(DDDA, SVFUtil::outs() << "!##start new computation from loadSrc svfgNode " <<
+               load->getId() << " --> " << loadSrc->getId() << "\n");
+-        const SVFGEdge* edge = getSVFG()->getIntraVFGEdge(loadSrc,load,SVFGEdge::IntraDirectVF);
++        const SVFGEdge* edge = getSVFG()->getSVFGEdge(loadSrc,load,SVFGEdge::IntraDirectVF);
+         assert(edge && "Edge not found!!");
+         backwardPropDpm(pts,load->getPAGSrcNodeID(),oldDpm,edge);
+ 
+@@ -378,7 +378,7 @@ protected:
+         const SVFGNode* storeDst = getDefSVFGNode(store->getPAGDstNode());
+         DBOUT(DDDA, SVFUtil::outs() << "!##start new computation from storeDst svfgNode " <<
+               store->getId() << " --> " << storeDst->getId() << "\n");
+-        const SVFGEdge* edge = getSVFG()->getIntraVFGEdge(storeDst,store,SVFGEdge::IntraDirectVF);
++        const SVFGEdge* edge = getSVFG()->getSVFGEdge(storeDst,store,SVFGEdge::IntraDirectVF);
+         assert(edge && "Edge not found!!");
+         backwardPropDpm(pts,store->getPAGDstNodeID(),oldDpm,edge);
+     }
+@@ -388,7 +388,7 @@ protected:
+         const SVFGNode* storeSrc = getDefSVFGNode(store->getPAGSrcNode());
+         DBOUT(DDDA, SVFUtil::outs() << "++backtrace to storeSrc from svfgNode " << getLoadDpm(oldDpm).getLoc()->getId() << " to "<<
+               store->getId() << " to " << storeSrc->getId() <<"\n");
+-        const SVFGEdge* edge = getSVFG()->getIntraVFGEdge(storeSrc,store,SVFGEdge::IntraDirectVF);
++        const SVFGEdge* edge = getSVFG()->getSVFGEdge(storeSrc,store,SVFGEdge::IntraDirectVF);
+         assert(edge && "Edge not found!!");
+         backwardPropDpm(pts,store->getPAGSrcNodeID(),oldDpm,edge);
+     }
+diff --git a/include/Graphs/ConsG.h b/include/Graphs/ConsG.h
+index b11d9fb8..66ef5f2d 100644
+--- a/include/Graphs/ConsG.h
++++ b/include/Graphs/ConsG.h
+@@ -362,9 +362,6 @@ public:
+     void dump(std::string name);
+     /// Print CG into terminal
+     void print();
+-
+-    /// View graph from the debugger.
+-    void view();
+ };
+ 
+ } // End namespace SVF
+diff --git a/include/Graphs/GenericGraph.h b/include/Graphs/GenericGraph.h
+index 4c3547ca..838c95bd 100644
+--- a/include/Graphs/GenericGraph.h
++++ b/include/Graphs/GenericGraph.h
+@@ -449,23 +449,6 @@ public:
+ namespace llvm
+ {
+ 
+-template<class EdgeTy, class NodeTy>
+-struct edge_unary_function
+-{
+-    NodeTy operator()(EdgeTy edge) const {
+-      return edge->getDstNode();
+-    }
+-};
+-
+-template<class PairTy, class NodeTy>
+-struct pair_unary_function
+-{
+-    NodeTy operator()(PairTy pair) const {
+-      return pair.second;
+-    }
+-};
+-
+-
+ /*!
+  * GraphTraits for nodes
+  */
+@@ -474,7 +457,7 @@ template<class NodeTy,class EdgeTy> struct GraphTraits<SVF::GenericNode<NodeTy,E
+     typedef NodeTy NodeType;
+     typedef EdgeTy EdgeType;
+ 
+-    typedef edge_unary_function<EdgeType*, NodeType*> DerefEdge;
++    typedef std::pointer_to_unary_function<EdgeType*, NodeType*> DerefEdge;
+ 
+     // nodes_iterator/begin/end - Allow iteration over all nodes in the graph
+     typedef mapped_iterator<typename SVF::GenericNode<NodeTy,EdgeTy>::iterator, DerefEdge> ChildIteratorType;
+@@ -486,19 +469,23 @@ template<class NodeTy,class EdgeTy> struct GraphTraits<SVF::GenericNode<NodeTy,E
+ 
+     static inline ChildIteratorType child_begin(const NodeType* N)
+     {
+-        return map_iterator(N->OutEdgeBegin(), DerefEdge());
++        return map_iterator(N->OutEdgeBegin(), DerefEdge(edgeDereference));
+     }
+     static inline ChildIteratorType child_end(const NodeType* N)
+     {
+-        return map_iterator(N->OutEdgeEnd(), DerefEdge());
++        return map_iterator(N->OutEdgeEnd(), DerefEdge(edgeDereference));
+     }
+     static inline ChildIteratorType direct_child_begin(const NodeType *N)
+     {
+-        return map_iterator(N->directOutEdgeBegin(), DerefEdge());
++        return map_iterator(N->directOutEdgeBegin(), DerefEdge(edgeDereference));
+     }
+     static inline ChildIteratorType direct_child_end(const NodeType *N)
+     {
+-        return map_iterator(N->directOutEdgeEnd(), DerefEdge());
++        return map_iterator(N->directOutEdgeEnd(), DerefEdge(edgeDereference));
++    }
++    static NodeType* edgeDereference(EdgeType* edge)
++    {
++        return edge->getDstNode();
+     }
+ 
+ };
+@@ -512,7 +499,7 @@ struct GraphTraits<Inverse<SVF::GenericNode<NodeTy,EdgeTy>* > >
+     typedef NodeTy NodeType;
+     typedef EdgeTy EdgeType;
+ 
+-    typedef edge_unary_function<EdgeType*, NodeType*> DerefEdge;
++    typedef std::pointer_to_unary_function<EdgeType*, NodeType*> DerefEdge;
+ 
+     // nodes_iterator/begin/end - Allow iteration over all nodes in the graph
+     typedef mapped_iterator<typename SVF::GenericNode<NodeTy,EdgeTy>::iterator, DerefEdge> ChildIteratorType;
+@@ -524,11 +511,16 @@ struct GraphTraits<Inverse<SVF::GenericNode<NodeTy,EdgeTy>* > >
+ 
+     static inline ChildIteratorType child_begin(const NodeType* N)
+     {
+-        return map_iterator(N->InEdgeBegin(), DerefEdge());
++        return map_iterator(N->InEdgeBegin(), DerefEdge(edgeDereference));
+     }
+     static inline ChildIteratorType child_end(const NodeType* N)
+     {
+-        return map_iterator(N->InEdgeEnd(), DerefEdge());
++        return map_iterator(N->InEdgeEnd(), DerefEdge(edgeDereference));
++    }
++
++    static inline NodeType* edgeDereference(EdgeType* edge)
++    {
++        return edge->getSrcNode();
+     }
+ 
+     static inline unsigned getNodeID(const NodeType* N)
+@@ -551,18 +543,23 @@ template<class NodeTy,class EdgeTy> struct GraphTraits<SVF::GenericGraph<NodeTy,
+         return nullptr; // return null here, maybe later we could create a dummy node
+     }
+     typedef std::pair<SVF::NodeID, NodeType*> PairTy;
+-    typedef pair_unary_function<PairTy, NodeType*> DerefVal;
++    typedef std::pointer_to_unary_function<PairTy, NodeType*> DerefVal;
+ 
+     // nodes_iterator/begin/end - Allow iteration over all nodes in the graph
+     typedef mapped_iterator<typename GenericGraphTy::iterator, DerefVal> nodes_iterator;
+ 
+     static nodes_iterator nodes_begin(GenericGraphTy *G)
+     {
+-        return map_iterator(G->begin(), DerefVal());
++        return map_iterator(G->begin(), DerefVal(Valdereference));
+     }
+     static nodes_iterator nodes_end(GenericGraphTy *G)
+     {
+-        return map_iterator(G->end(), DerefVal());
++        return map_iterator(G->end(), DerefVal(Valdereference));
++    }
++
++    static NodeType* Valdereference(PairTy P)
++    {
++        return P.second;
+     }
+ 
+     static unsigned graphSize(GenericGraphTy* G)
+diff --git a/include/Graphs/ICFG.h b/include/Graphs/ICFG.h
+index f5bc667b..04eccbd3 100644
+--- a/include/Graphs/ICFG.h
++++ b/include/Graphs/ICFG.h
+@@ -103,9 +103,6 @@ public:
+     /// Dump graph into dot file
+     void dump(const std::string& file, bool simple = false);
+ 
+-    /// View graph from the debugger
+-    void view();
+-
+     /// update ICFG for indirect calls
+     void updateCallGraph(PTACallGraph* callgraph);
+ 
+diff --git a/include/Graphs/ICFGNode.h b/include/Graphs/ICFGNode.h
+index 4adbb1c1..16754a11 100644
+--- a/include/Graphs/ICFGNode.h
++++ b/include/Graphs/ICFGNode.h
+@@ -126,8 +126,6 @@ public:
+ 
+     virtual const std::string toString() const;
+ 
+-    void dump() const;
+-
+ protected:
+     const SVFFunction* fun;
+     const BasicBlock* bb;
+diff --git a/include/Graphs/PAG.h b/include/Graphs/PAG.h
+index e4346045..e020a08f 100644
+--- a/include/Graphs/PAG.h
++++ b/include/Graphs/PAG.h
+@@ -842,9 +842,6 @@ public:
+     /// Dump PAG
+     void dump(std::string name);
+ 
+-    /// View graph from the debugger
+-    void view();
+-
+ };
+ 
+ } // End namespace SVF
+diff --git a/include/Graphs/PAGNode.h b/include/Graphs/PAGNode.h
+index e02fafaf..938f5536 100644
+--- a/include/Graphs/PAGNode.h
++++ b/include/Graphs/PAGNode.h
+@@ -250,12 +250,6 @@ public:
+ 
+     virtual const std::string toString() const;
+ 
+-    /// Get shape and/or color of node for .dot display.
+-    virtual const std::string getNodeAttrForDotDisplay() const;
+-
+-    /// Dump to console for debugging
+-    void dump() const;
+-
+     //@}
+     /// Overloading operator << for dumping PAGNode value
+     //@{
+diff --git a/include/Graphs/PTACallGraph.h b/include/Graphs/PTACallGraph.h
+index 3f1ef6ab..4a713451 100644
+--- a/include/Graphs/PTACallGraph.h
++++ b/include/Graphs/PTACallGraph.h
+@@ -437,9 +437,6 @@ public:
+ 
+     /// Dump the graph
+     void dump(const std::string& filename);
+-
+-    /// View the graph from the debugger
+-    void view();
+ };
+ 
+ } // End namespace SVF
+diff --git a/include/Graphs/SVFG.h b/include/Graphs/SVFG.h
+index 18367006..d49f8498 100644
+--- a/include/Graphs/SVFG.h
++++ b/include/Graphs/SVFG.h
+@@ -158,6 +158,12 @@ public:
+         return hasVFGNode(id);
+     }
+ 
++    /// Get a SVFG edge according to src and dst
++    inline SVFGEdge* getSVFGEdge(const SVFGNode* src, const SVFGNode* dst, SVFGEdge::VFGEdgeK kind)
++    {
++        return getVFGEdge(src, dst, kind);
++    }
++
+     /// Get all inter value flow edges of a indirect call site
+     void getInterVFEdgesForIndirectCallSite(const CallBlockNode* cs, const SVFFunction* callee, SVFGEdgeSetTy& edges);
+ 
+diff --git a/include/Graphs/VFG.h b/include/Graphs/VFG.h
+index 4c6206c2..ac2db229 100644
+--- a/include/Graphs/VFG.h
++++ b/include/Graphs/VFG.h
+@@ -52,7 +52,7 @@ public:
+     /// VFG kind
+     enum VFGK
+     {
+-        FULLSVFG, PTRONLYSVFG, FULLSVFG_OPT, PTRONLYSVFG_OPT
++        ORIGSVFGK, PTRONLYSVFGK
+     };
+ 
+     typedef Map<NodeID, VFGNode *> VFGNodeIDToNodeMapTy;
+@@ -99,13 +99,14 @@ protected:
+     PTACallGraph* callgraph;
+     PAG* pag;
+     VFGK kind;
++    bool dumpVFG;
+ 
+     /// Clean up memory
+     void destroy();
+ 
+ public:
+     /// Constructor
+-    VFG(PTACallGraph* callgraph, VFGK k = FULLSVFG);
++    VFG(PTACallGraph* callgraph, VFGK k = ORIGSVFGK);
+ 
+     /// Destructor
+     virtual ~VFG()
+@@ -122,9 +123,21 @@ public:
+     /// Return true if this VFG only contains pointer related SVFGNodes for pointer analysis
+     inline bool isPtrOnlySVFG() const
+     {
+-        return (kind == PTRONLYSVFG) || (kind == PTRONLYSVFG_OPT);
++        return kind == PTRONLYSVFGK;
+     }
+ 
++	/// Whether to dump VFG;
++	inline void setDumpVFG(bool flag)
++	{
++		dumpVFG = flag;
++	}
++
++	/// Whether to dump VFG;
++	inline bool getDumpVFG() const
++	{
++		return dumpVFG;
++	}
++
+     /// Return PAG
+     inline PAG* getPAG() const
+     {
+@@ -155,14 +168,11 @@ public:
+     }
+ 
+     /// Get a SVFG edge according to src and dst
+-    VFGEdge* getIntraVFGEdge(const VFGNode* src, const VFGNode* dst, VFGEdge::VFGEdgeK kind);
++    VFGEdge* getVFGEdge(const VFGNode* src, const VFGNode* dst, VFGEdge::VFGEdgeK kind);
+ 
+     /// Dump graph into dot file
+     void dump(const std::string& file, bool simple = false);
+ 
+-    /// Dump graph into dot file
+-    void view();
+-
+     /// Update VFG based on pointer analysis results
+     void updateCallGraph(PointerAnalysis* pta);
+ 
+diff --git a/include/MemoryModel/AbstractPointsToDS.h b/include/MemoryModel/AbstractPointsToDS.h
+index 1ad6b62e..8e95b1b4 100644
+--- a/include/MemoryModel/AbstractPointsToDS.h
++++ b/include/MemoryModel/AbstractPointsToDS.h
+@@ -19,27 +19,26 @@
+ #ifndef ABSTRACT_POINTSTO_H_
+ #define ABSTRACT_POINTSTO_H_
+ 
+-#include "Util/SVFBasicTypes.h"
+-
+ namespace SVF
+ {
+ /// Basic points-to data structure
+ /// Given a key (variable/condition variable), return its points-to data (pts/condition pts)
+ /// It is designed flexible for different context, heap and path sensitive analysis
+-/// Context Insensitive			   Key --> Variable, DataSet --> PointsTo
+-/// Context sensitive:  			   Key --> CondVar,  DataSet --> PointsTo
+-/// Heap sensitive:     			   Key --> Variable  DataSet --> CondPointsToSet
+-/// Context and heap sensitive:     Key --> CondVar,  DataSet --> CondPointsToSet
++/// Context Insensitive			   Key --> Variable, Data --> PointsTo
++/// Context sensitive:  			   Key --> CondVar,  Data --> PointsTo
++/// Heap sensitive:     			   Key --> Variable  Data --> CondPointsToSet
++/// Context and heap sensitive:     Key --> CondVar,  Data --> CondPointsToSet
+ ///
+ /// This class is abstract to allow for multiple methods of actually storing points-to sets.
+-/// Key:     "owning" variable of a points-to set.
+-/// KeySet:  collection of keys.
+-/// Data:    elements in points-to sets.
+-/// DataSet: the points-to set; a collection of Data.
+-template <typename Key, typename KeySet, typename Data, typename DataSet>
++/// Key:   "owning" variable of a points-to set.
++/// Datum: elements in points-to sets.
++/// Data:  the points-to set; a collection of Datums.
++template <typename Key, typename Datum, typename Data>
+ class PTData
+ {
+ public:
++    typedef Set<Key> KeySet;
++
+     /// Types of a points-to data structures.
+     enum PTDataTy
+     {
+@@ -68,20 +67,20 @@ public:
+     virtual void clear() = 0;
+ 
+     /// Get points-to set of var.
+-    virtual const DataSet& getPts(const Key& var) = 0;
+-    /// Get reverse points-to set of a datum.
+-    virtual const KeySet& getRevPts(const Data& datum) = 0;
++    virtual const Data& getPts(const Key& var) = 0;
++    /// Get reverse points-to set of datum.
++    virtual const KeySet& getRevPts(const Datum& datum) = 0;
+ 
+     /// Adds element to the points-to set associated with var.
+-    virtual bool addPts(const Key& var, const Data& element) = 0;
++    virtual bool addPts(const Key& var, const Datum& element) = 0;
+ 
+     /// Performs pts(dstVar) = pts(dstVar) U pts(srcVar).
+     virtual bool unionPts(const Key& dstVar, const Key& srcVar) = 0;
+-    /// Performs pts(dstVar) = pts(dstVar) U srcDataSet.
+-    virtual bool unionPts(const Key& dstVar, const DataSet& srcDataSet) = 0;
++    /// Performs pts(dstVar) = pts(dstVar) U srcData.
++    virtual bool unionPts(const Key& dstVar, const Data& srcData) = 0;
+ 
+     /// Clears element from the points-to set of var.
+-    virtual void clearPts(const Key& var, const Data& element) = 0;
++    virtual void clearPts(const Key& var, const Datum& element) = 0;
+     /// Fully clears the points-to set of var.
+     virtual void clearFullPts(const Key& var) = 0;
+ 
+@@ -97,11 +96,11 @@ protected:
+ /// Abstract diff points-to data with cached information.
+ /// This is an optimisation on top of the base points-to data structure.
+ /// The points-to information is propagated incrementally only for the different parts.
+-template <typename Key, typename KeySet, typename Data, typename DataSet>
+-class DiffPTData : public PTData<Key, KeySet, Data, DataSet>
++template <typename Key, typename Datum, typename Data>
++class DiffPTData : public PTData<Key, Datum, Data>
+ {
+ public:
+-    typedef PTData<Key, KeySet, Data, DataSet> BasePTData;
++    typedef PTData<Key, Datum, Data> BasePTData;
+     typedef typename BasePTData::PTDataTy PTDataTy;
+ 
+     DiffPTData(bool reversePT = true, PTDataTy ty = PTDataTy::Diff) : BasePTData(reversePT, ty) { }
+@@ -109,12 +108,12 @@ public:
+     virtual ~DiffPTData() { }
+ 
+     /// Get diff points to.
+-    virtual const DataSet& getDiffPts(Key& var) = 0;
++    virtual const Data& getDiffPts(Key& var) = 0;
+ 
+     /// Compute diff points to. Return TRUE if diff is not empty.
+     /// 1. calculate diff: diff = all - propa.
+     /// 2. update propagated pts: propa = all.
+-    virtual bool computeDiffPts(Key& var, const DataSet& all) = 0;
++    virtual bool computeDiffPts(Key& var, const Data& all) = 0;
+ 
+     /// Update dst's propagated points-to set with src's.
+     /// The final result is the intersection of these two sets.
+@@ -125,11 +124,11 @@ public:
+ 
+     /// Methods to support type inquiry through isa, cast, and dyn_cast:
+     ///@{
+-    static inline bool classof(const DiffPTData<Key, KeySet, Data, DataSet> *)
++    static inline bool classof(const DiffPTData<Key, Datum, Data> *)
+     {
+         return true;
+     }
+-    static inline bool classof(const PTData<Key, KeySet, Data, DataSet>* ptd)
++    static inline bool classof(const PTData<Key, Datum, Data>* ptd)
+     {
+         return ptd->getPTDTY() == PTDataTy::Diff || ptd->getPTDTY() == PTDataTy::MutDiff;
+     }
+@@ -140,11 +139,11 @@ public:
+ /// Points-to information is maintained at each program point (statement).
+ /// For address-taken variables, every program point has two sets: IN and OUT points-to sets.
+ /// For top-level variables, points-to sets are maintained flow-insensitively via getPts(var).
+-template <typename Key, typename KeySet, typename Data, typename DataSet>
+-class DFPTData : public PTData<Key, KeySet, Data, DataSet>
++template <typename Key, typename Datum, typename Data>
++class DFPTData : public PTData<Key, Datum, Data>
+ {
+ public:
+-    typedef PTData<Key, KeySet, Data, DataSet> BasePTData;
++    typedef PTData<Key, Datum, Data> BasePTData;
+     typedef typename BasePTData::PTDataTy PTDataTy;
+ 
+     typedef NodeID LocID;
+@@ -164,8 +163,8 @@ public:
+     ///@{
+     virtual bool hasDFOutSet(LocID loc, const Key& var) const = 0;
+     virtual bool hasDFInSet(LocID loc, const Key& var) const = 0;
+-    virtual const DataSet& getDFInPtsSet(LocID loc, const Key& var) = 0;
+-    virtual const DataSet& getDFOutPtsSet(LocID loc, const Key& var) = 0;
++    virtual const Data& getDFInPtsSet(LocID loc, const Key& var) = 0;
++    virtual const Data& getDFOutPtsSet(LocID loc, const Key& var) = 0;
+     ///@}
+ 
+     /// Update points-to for IN/OUT set
+@@ -196,12 +195,12 @@ public:
+ 
+     /// Methods to support type inquiry through isa, cast, and dyn_cast:
+     ///@{
+-    static inline bool classof(const DFPTData<Key, KeySet, Data, DataSet> *)
++    static inline bool classof(const DFPTData<Key, Datum, Data> *)
+     {
+         return true;
+     }
+ 
+-    static inline bool classof(const PTData<Key, KeySet, Data, DataSet>* ptd)
++    static inline bool classof(const PTData<Key, Datum, Data>* ptd)
+     {
+         return ptd->getPTDTY() == BasePTData::DataFlow
+                || ptd->getPTDTY() == BasePTData::MutDataFlow
+@@ -213,38 +212,41 @@ public:
+ /// PTData with normal keys and versioned keys. Replicates the PTData interface for
+ /// versioned keys too. Intended to be used for versioned flow-sensitive PTA--hence the
+ /// name--but can be used anywhere where there are two types of keys at play.
+-template <typename Key, typename KeySet, typename Data, typename DataSet, typename VersionedKey, typename VersionedKeySet>
+-class VersionedPTData : public PTData<Key, KeySet, Data, DataSet>
++template <typename Key, typename Datum, typename Data, typename VersionedKey>
++class VersionedPTData : public PTData<Key, Datum, Data>
+ {
+ public:
+-    typedef PTData<Key, KeySet, Data, DataSet> BasePTData;
++    typedef PTData<Key, Datum, Data> BasePTData;
+     typedef typename BasePTData::PTDataTy PTDataTy;
++    typedef typename BasePTData::KeySet KeySet;
++
++    typedef Set<VersionedKey> VersionedKeySet;
+ 
+     VersionedPTData(bool reversePT = true, PTDataTy ty = PTDataTy::Versioned) : BasePTData(reversePT, ty) { }
+ 
+     virtual ~VersionedPTData() { }
+ 
+-    virtual const DataSet& getPts(const VersionedKey& vk) = 0;
+-    virtual const VersionedKeySet& getVersionedKeyRevPts(const Data& datum) = 0;
++    virtual const Data& getPts(const VersionedKey& vk) = 0;
++    virtual const VersionedKeySet& getVersionedKeyRevPts(const Datum& datum) = 0;
+ 
+-    virtual bool addPts(const VersionedKey& vk, const Data& element) = 0;
++    virtual bool addPts(const VersionedKey& vk, const Datum& element) = 0;
+ 
+     virtual bool unionPts(const VersionedKey& dstVar, const VersionedKey& srcVar) = 0;
+     virtual bool unionPts(const VersionedKey& dstVar, const Key& srcVar) = 0;
+     virtual bool unionPts(const Key& dstVar, const VersionedKey& srcVar) = 0;
+-    virtual bool unionPts(const VersionedKey& dstVar, const DataSet& srcDataSet) = 0;
++    virtual bool unionPts(const VersionedKey& dstVar, const Data& srcData) = 0;
+ 
+-    virtual void clearPts(const VersionedKey& vk, const Data& element) = 0;
++    virtual void clearPts(const VersionedKey& vk, const Datum& element) = 0;
+     virtual void clearFullPts(const VersionedKey& vk) = 0;
+ 
+     /// Methods to support type inquiry through isa, cast, and dyn_cast:
+     ///@{
+-    static inline bool classof(const VersionedPTData<Key, KeySet, Data, DataSet, VersionedKey, VersionedKeySet> *)
++    static inline bool classof(const VersionedPTData<Key, Datum, Data, VersionedKey> *)
+     {
+         return true;
+     }
+ 
+-    static inline bool classof(const PTData<Key, KeySet, Data, DataSet>* ptd)
++    static inline bool classof(const PTData<Key, Datum, Data>* ptd)
+     {
+         return ptd->getPTDTY() == PTDataTy::Versioned || ptd->getPTDTY() == PTDataTy::MutVersioned;
+     }
+diff --git a/include/MemoryModel/LocationSet.h b/include/MemoryModel/LocationSet.h
+index 12bc2b36..2ead3047 100644
+--- a/include/MemoryModel/LocationSet.h
++++ b/include/MemoryModel/LocationSet.h
+@@ -290,7 +290,7 @@ private:
+ 
+ template <> struct std::hash<SVF::LocationSet> {
+     size_t operator()(const SVF::LocationSet &ls) const {
+-        SVF::Hash<std::pair<SVF::Size_t, SVF::Size_t>> h;
++        std::hash<std::pair<SVF::Size_t, SVF::Size_t>> h;
+         return h(std::make_pair(ls.getOffset(), ls.getByteOffset()));
+     }
+ };
+diff --git a/include/MemoryModel/MutablePointsToDS.h b/include/MemoryModel/MutablePointsToDS.h
+index 9bef7d06..4bc3f765 100644
+--- a/include/MemoryModel/MutablePointsToDS.h
++++ b/include/MemoryModel/MutablePointsToDS.h
+@@ -4,46 +4,27 @@
+ #ifndef MUTABLE_POINTSTO_H_
+ #define MUTABLE_POINTSTO_H_
+ 
+-#include "MemoryModel/AbstractPointsToDS.h"
+-#include "Util/SVFBasicTypes.h"
+-#include "Util/SVFUtil.h"
+-
+ namespace SVF
+ {
+ 
+-/// Templated function to insert an element into a Set, CondSet, or NodeBS.
+-template <typename Key, typename KeySet>
+-void insertKey(const Key &key, KeySet &keySet)
+-{
+-    keySet.insert(key);
+-}
+-
+-// The template parameters are unnecessary, obviously, but removing it would
+-// require us to create a .cpp. For one function, that seems to add more
+-// than this hack.
+-template <typename Key, typename KeySet>
+-void insertKey(const NodeID &key, NodeBS &keySet)
+-{
+-    keySet.set(key);
+-}
+-
+-template <typename Key, typename KeySet, typename Data, typename DataSet>
++template <typename Key, typename Datum, typename Data>
+ class MutableDFPTData;
+ 
+ /// PTData implemented using points-to sets which are created once and updated continuously.
+-template <typename Key, typename KeySet, typename Data, typename DataSet>
+-class MutablePTData : public PTData<Key, KeySet, Data, DataSet>
++template <typename Key, typename Datum, typename Data>
++class MutablePTData : public PTData<Key, Datum, Data>
+ {
+-    friend class MutableDFPTData<Key, KeySet, Data, DataSet>;
++    friend class MutableDFPTData<Key, Datum, Data>;
+ public:
+-    typedef PTData<Key, KeySet, Data, DataSet> BasePTData;
++    typedef PTData<Key, Datum, Data> BasePTData;
+     typedef typename BasePTData::PTDataTy PTDataTy;
++    typedef typename BasePTData::KeySet KeySet;
+ 
+-    typedef Map<Key, DataSet> PtsMap;
+-    typedef Map<Data, KeySet> RevPtsMap;
++    typedef Map<Key, Data> PtsMap;
++    typedef Map<Datum, KeySet> RevPtsMap;
+     typedef typename PtsMap::iterator PtsMapIter;
+     typedef typename PtsMap::const_iterator PtsMapConstIter;
+-    typedef typename DataSet::iterator iterator;
++    typedef typename Data::iterator iterator;
+ 
+     /// Constructor
+     MutablePTData(bool reversePT = true, PTDataTy ty = PTDataTy::MutBase) : BasePTData(reversePT, ty) { }
+@@ -62,18 +43,18 @@ public:
+         revPtsMap.clear();
+     }
+ 
+-    virtual inline const DataSet& getPts(const Key& var) override
++    virtual inline const Data& getPts(const Key& var) override
+     {
+         return ptsMap[var];
+     }
+ 
+-    virtual inline const KeySet& getRevPts(const Data& datum) override
++    virtual inline const KeySet& getRevPts(const Datum& datum) override
+     {
+         assert(this->rev && "MutablePTData::getRevPts: constructed without reverse PT support!");
+         return revPtsMap[datum];
+     }
+ 
+-    virtual inline bool addPts(const Key &dstKey, const Data& element) override
++    virtual inline bool addPts(const Key &dstKey, const Datum& element) override
+     {
+         addSingleRevPts(revPtsMap[element], dstKey);
+         return addPts(ptsMap[dstKey], element);
+@@ -85,10 +66,10 @@ public:
+         return unionPts(ptsMap[dstKey], getPts(srcKey));
+     }
+ 
+-    virtual inline bool unionPts(const Key& dstKey, const DataSet& srcDataSet) override
++    virtual inline bool unionPts(const Key& dstKey, const Data& srcData) override
+     {
+-        addRevPts(srcDataSet,dstKey);
+-        return unionPts(ptsMap[dstKey], srcDataSet);
++        addRevPts(srcData,dstKey);
++        return unionPts(ptsMap[dstKey], srcData);
+     }
+ 
+     virtual inline void dumpPTData() override
+@@ -96,7 +77,7 @@ public:
+         dumpPts(ptsMap);
+     }
+ 
+-    virtual void clearPts(const Key& var, const Data& element) override
++    virtual void clearPts(const Key& var, const Datum& element) override
+     {
+         ptsMap[var].reset(element);
+     }
+@@ -108,12 +89,12 @@ public:
+ 
+     /// Methods to support type inquiry through isa, cast, and dyn_cast:
+     ///@{
+-    static inline bool classof(const MutablePTData<Key, KeySet, Data, DataSet> *)
++    static inline bool classof(const MutablePTData<Key, Datum, Data> *)
+     {
+         return true;
+     }
+ 
+-    static inline bool classof(const PTData<Key, KeySet, Data, DataSet>* ptd)
++    static inline bool classof(const PTData<Key, Datum, Data>* ptd)
+     {
+         return ptd->getPTDTY() == PTDataTy::MutBase;
+     }
+@@ -125,11 +106,11 @@ protected:
+         for (PtsMapConstIter nodeIt = ptsSet.begin(); nodeIt != ptsSet.end(); nodeIt++)
+         {
+             const Key& var = nodeIt->first;
+-            const DataSet & pts = nodeIt->second;
++            const Data & pts = nodeIt->second;
+             if (pts.empty())
+                 continue;
+             O << var << " ==> { ";
+-            for(typename DataSet::iterator cit = pts.begin(), ecit=pts.end(); cit!=ecit; ++cit)
++            for(typename Data::iterator cit = pts.begin(), ecit=pts.end(); cit!=ecit; ++cit)
+             {
+                 O << *cit << " ";
+             }
+@@ -140,19 +121,19 @@ protected:
+ private:
+     /// Internal union/add points-to helper methods.
+     ///@{
+-    inline bool unionPts(DataSet& dstDataSet, const DataSet& srcDataSet)
++    inline bool unionPts(Data& dstData, const Data& srcData)
+     {
+-        return dstDataSet |= srcDataSet;
++        return dstData |= srcData;
+     }
+-    inline bool addPts(DataSet &d, const Data& e)
++    inline bool addPts(Data &d, const Datum& e)
+     {
+         return d.test_and_set(e);
+     }
+     inline void addSingleRevPts(KeySet &revData, const Key& tgr)
+     {
+-        if (this->rev) insertKey<Key, KeySet>(tgr, revData);
++        if (this->rev) revData.insert(tgr);
+     }
+-    inline void addRevPts(const DataSet &ptsData, const Key& tgr)
++    inline void addRevPts(const Data &ptsData, const Key& tgr)
+     {
+         if (this->rev)
+         {
+@@ -168,15 +149,16 @@ protected:
+ };
+ 
+ /// DiffPTData implemented with points-to sets which are updated continuously.
+-template <typename Key, typename KeySet, typename Data, typename DataSet>
+-class MutableDiffPTData : public DiffPTData<Key, KeySet, Data, DataSet>
++template <typename Key, typename Datum, typename Data>
++class MutableDiffPTData : public DiffPTData<Key, Datum, Data>
+ {
+ public:
+-    typedef PTData<Key, KeySet, Data, DataSet> BasePTData;
+-    typedef DiffPTData<Key, KeySet, Data, DataSet> BaseDiffPTData;
++    typedef PTData<Key, Datum, Data> BasePTData;
++    typedef DiffPTData<Key, Datum, Data> BaseDiffPTData;
+     typedef typename BasePTData::PTDataTy PTDataTy;
++    typedef typename BasePTData::KeySet KeySet;
+ 
+-    typedef typename MutablePTData<Key, KeySet, Data, DataSet>::PtsMap PtsMap;
++    typedef typename MutablePTData<Key, Datum, Data>::PtsMap PtsMap;
+ 
+     /// Constructor
+     MutableDiffPTData(bool reversePT = true, PTDataTy ty = PTDataTy::Diff) : BaseDiffPTData(reversePT, ty), mutPTData(reversePT) { }
+@@ -193,18 +175,18 @@ public:
+         mutPTData.clear();
+     }
+ 
+-    virtual inline const DataSet& getPts(const Key& var) override
++    virtual inline const Data& getPts(const Key& var) override
+     {
+         return mutPTData.getPts(var);
+     }
+ 
+-    virtual inline const KeySet& getRevPts(const Data& datum) override
++    virtual inline const KeySet& getRevPts(const Datum& datum) override
+     {
+         assert(this->rev && "MutableDiffPTData::getRevPts: constructed without reverse PT support!");
+         return mutPTData.getRevPts(datum);
+     }
+ 
+-    virtual inline bool addPts(const Key &dstKey, const Data& element) override
++    virtual inline bool addPts(const Key &dstKey, const Datum& element) override
+     {
+         return mutPTData.addPts(dstKey, element);
+     }
+@@ -214,12 +196,12 @@ public:
+         return mutPTData.unionPts(dstKey, srcKey);
+     }
+ 
+-    virtual inline bool unionPts(const Key& dstKey, const DataSet& srcDataSet) override
++    virtual inline bool unionPts(const Key& dstKey, const Data& srcData) override
+     {
+-        return mutPTData.unionPts(dstKey, srcDataSet);
++        return mutPTData.unionPts(dstKey, srcData);
+     }
+ 
+-    virtual void clearPts(const Key& var, const Data& element) override
++    virtual void clearPts(const Key& var, const Datum& element) override
+     {
+         mutPTData.clearPts(var, element);
+     }
+@@ -234,18 +216,18 @@ public:
+         mutPTData.dumpPTData();
+     }
+ 
+-    virtual inline const DataSet &getDiffPts(Key &var) override
++    virtual inline const Data &getDiffPts(Key &var) override
+     {
+         return getMutDiffPts(var);
+     }
+ 
+-    virtual inline bool computeDiffPts(Key &var, const DataSet &all) override
++    virtual inline bool computeDiffPts(Key &var, const Data &all) override
+     {
+         /// Clear diff pts.
+-        DataSet& diff = getMutDiffPts(var);
++        Data& diff = getMutDiffPts(var);
+         diff.clear();
+         /// Get all pts.
+-        DataSet& propa = getPropaPts(var);
++        Data& propa = getPropaPts(var);
+         diff.intersectWithComplement(all, propa);
+         propa = all;
+         return !diff.empty();
+@@ -253,8 +235,8 @@ public:
+ 
+     virtual inline void updatePropaPtsMap(Key &src, Key &dst) override
+     {
+-        DataSet& srcPropa = getPropaPts(src);
+-        DataSet& dstPropa = getPropaPts(dst);
++        Data& srcPropa = getPropaPts(src);
++        Data& dstPropa = getPropaPts(dst);
+         dstPropa &= srcPropa;
+     }
+ 
+@@ -265,12 +247,12 @@ public:
+ 
+     /// Methods to support type inquiry through isa, cast, and dyn_cast:
+     ///@{
+-    static inline bool classof(const MutableDiffPTData<Key, KeySet, Data, DataSet> *)
++    static inline bool classof(const MutableDiffPTData<Key, Datum, Data> *)
+     {
+         return true;
+     }
+ 
+-    static inline bool classof(const PTData<Key, KeySet, Data, DataSet>* ptd)
++    static inline bool classof(const PTData<Key, Datum, Data>* ptd)
+     {
+         return ptd->getPTDTY() == PTDataTy::MutDiff;
+     }
+@@ -278,34 +260,35 @@ public:
+ 
+ protected:
+     /// Get diff PTS that can be modified.
+-    inline DataSet &getMutDiffPts(Key &var)
++    inline Data &getMutDiffPts(Key &var)
+     {
+         return diffPtsMap[var];
+     }
+ 
+     /// Get propagated points to.
+-    inline DataSet &getPropaPts(Key &var)
++    inline Data &getPropaPts(Key &var)
+     {
+         return propaPtsMap[var];
+     }
+ 
+ private:
+     /// Backing to implement the basic PTData methods. This allows us to avoid multiple-inheritance.
+-    MutablePTData<Key, KeySet, Data, DataSet> mutPTData;
++    MutablePTData<Key, Datum, Data> mutPTData;
+     /// Diff points-to to be propagated.
+     PtsMap diffPtsMap;
+     /// Points-to already propagated.
+     PtsMap propaPtsMap;
+ };
+ 
+-template <typename Key, typename KeySet, typename Data, typename DataSet>
+-class MutableDFPTData : public DFPTData<Key, KeySet, Data, DataSet>
++template <typename Key, typename Datum, typename Data>
++class MutableDFPTData : public DFPTData<Key, Datum, Data>
+ {
+ public:
+-    typedef PTData<Key, KeySet, Data, DataSet> BasePTData;
+-    typedef MutablePTData<Key, KeySet, Data, DataSet> BaseMutPTData;
+-    typedef DFPTData<Key, KeySet, Data, DataSet> BaseDFPTData;
++    typedef PTData<Key, Datum, Data> BasePTData;
++    typedef MutablePTData<Key, Datum, Data> BaseMutPTData;
++    typedef DFPTData<Key, Datum, Data> BaseDFPTData;
+     typedef typename BasePTData::PTDataTy PTDataTy;
++    typedef typename BasePTData::KeySet KeySet;
+ 
+     typedef typename BaseDFPTData::LocID LocID;
+     typedef typename BaseMutPTData::PtsMap PtsMap;
+@@ -329,12 +312,12 @@ public:
+         mutPTData.clear();
+     }
+ 
+-    virtual inline const DataSet& getPts(const Key& var) override
++    virtual inline const Data& getPts(const Key& var) override
+     {
+         return mutPTData.getPts(var);
+     }
+ 
+-    virtual inline const KeySet& getRevPts(const Data& datum) override
++    virtual inline const KeySet& getRevPts(const Datum& datum) override
+     {
+         assert(this->rev && "MutableDFPTData::getRevPts: constructed without reverse PT support!");
+         return mutPTData.getRevPts(datum);
+@@ -368,13 +351,13 @@ public:
+         return (ptsMap.find(var) != ptsMap.end());
+     }
+ 
+-    virtual inline DataSet& getDFInPtsSet(LocID loc, const Key& var) override
++    virtual inline Data& getDFInPtsSet(LocID loc, const Key& var) override
+     {
+         PtsMap& inSet = dfInPtsMap[loc];
+         return inSet[var];
+     }
+ 
+-    virtual inline DataSet& getDFOutPtsSet(LocID loc, const Key& var) override
++    virtual inline Data& getDFOutPtsSet(LocID loc, const Key& var) override
+     {
+         PtsMap& outSet = dfOutPtsMap[loc];
+         return outSet[var];
+@@ -470,11 +453,11 @@ public:
+     {
+         return unionPts(mutPTData.ptsMap[dstKey], getPts(srcKey));
+     }
+-    virtual inline bool unionPts(const Key& dstKey, const DataSet& srcDataSet) override
++    virtual inline bool unionPts(const Key& dstKey, const Data& srcData) override
+     {
+-        return unionPts(mutPTData.ptsMap[dstKey],srcDataSet);
++        return unionPts(mutPTData.ptsMap[dstKey],srcData);
+     }
+-    virtual void clearPts(const Key& var, const Data& element) override
++    virtual void clearPts(const Key& var, const Datum& element) override
+     {
+         mutPTData.clearPts(var, element);
+     }
+@@ -486,11 +469,11 @@ public:
+ 
+     /// Methods to support type inquiry through isa, cast, and dyn_cast:
+     ///@{
+-    static inline bool classof(const MutableDFPTData<Key, KeySet, Data, DataSet> *)
++    static inline bool classof(const MutableDFPTData<Key, Datum, Data> *)
+     {
+         return true;
+     }
+-    static inline bool classof(const PTData<Key, KeySet, Data, DataSet>* ptd)
++    static inline bool classof(const PTData<Key, Datum, Data>* ptd)
+     {
+         return ptd->getPTDTY() == BaseDFPTData::MutDataFlow
+                || ptd->getPTDTY() == BaseDFPTData::IncMutDataFlow;
+@@ -500,11 +483,11 @@ public:
+ protected:
+     /// Internal union/add points-to helper methods.
+     ///@{
+-    inline bool unionPts(DataSet& dstDataSet, const DataSet& srcDataSet)
++    inline bool unionPts(Data& dstData, const Data& srcData)
+     {
+-        return dstDataSet |= srcDataSet;
++        return dstData |= srcData;
+     }
+-    inline bool addPts(DataSet &d, const Data& e)
++    inline bool addPts(Data &d, const Datum& e)
+     {
+         return d.test_and_set(e);
+     }
+@@ -564,7 +547,7 @@ public:
+         for (PtsMapConstIter nodeIt = ptsSet.begin(); nodeIt != ptsSet.end(); nodeIt++)
+         {
+             const Key& var = nodeIt->first;
+-            const DataSet & pts = nodeIt->second;
++            const Data & pts = nodeIt->second;
+             if (pts.empty())
+                 continue;
+             O << "<" << var << ",{";
+@@ -581,25 +564,25 @@ protected:
+     DFPtsMap dfOutPtsMap;
+     /// Backing to implement the basic PTData methods which are not overridden.
+     /// This allows us to avoid multiple-inheritance.
+-    MutablePTData<Key, KeySet, Data, DataSet> mutPTData;
++    MutablePTData<Key, Datum, Data> mutPTData;
+ };
+ 
+ /// Incremental version of the mutable data-flow points-to data structure.
+-template <typename Key, typename KeySet, typename Data, typename DataSet>
+-class IncMutableDFPTData : public MutableDFPTData<Key, KeySet, Data, DataSet>
++template <typename Key, typename Datum, typename Data>
++class IncMutableDFPTData : public MutableDFPTData<Key, Datum, Data>
+ {
+ public:
+-    typedef PTData<Key, KeySet, Data, DataSet> BasePTData;
+-    typedef MutablePTData<Key, KeySet, Data, DataSet> BaseMutPTData;
+-    typedef DFPTData<Key, KeySet, Data, DataSet> BaseDFPTData;
+-    typedef MutableDFPTData<Key, KeySet, Data, DataSet> BaseMutDFPTData;
++    typedef PTData<Key, Datum, Data> BasePTData;
++    typedef MutablePTData<Key, Datum, Data> BaseMutPTData;
++    typedef DFPTData<Key, Datum, Data> BaseDFPTData;
++    typedef MutableDFPTData<Key, Datum, Data> BaseMutDFPTData;
+     typedef typename BasePTData::PTDataTy PTDataTy;
+ 
+     typedef typename BaseDFPTData::LocID LocID;
+-    typedef Map<LocID, DataSet> UpdatedVarMap;	///< for propagating only newly added variable in IN/OUT set
++    typedef Map<LocID, Data> UpdatedVarMap;	///< for propagating only newly added variable in IN/OUT set
+     typedef typename UpdatedVarMap::iterator UpdatedVarMapIter;
+     typedef typename UpdatedVarMap::const_iterator UpdatedVarconstIter;
+-    typedef typename DataSet::iterator DataIter;
++    typedef typename Data::iterator DataIter;
+ 
+ private:
+     UpdatedVarMap outUpdatedVarMap;
+@@ -673,7 +656,7 @@ public:
+         if (this->hasDFInSet(loc))
+         {
+             /// Only variables has new pts from IN set need to be updated.
+-            DataSet pts = getDFInUpdatedVar(loc);
++            Data pts = getDFInUpdatedVar(loc);
+             for (DataIter ptsIt = pts.begin(), ptsEit = pts.end(); ptsIt != ptsEit; ++ptsIt)
+             {
+                 const Key var = *ptsIt;
+@@ -711,7 +694,7 @@ public:
+     {
+         if (this->hasDFOutSet(loc))
+         {
+-            DataSet pts = getDFOutUpdatedVar(loc);
++            Data pts = getDFOutUpdatedVar(loc);
+             for (DataIter ptsIt = pts.begin(), ptsEit = pts.end(); ptsIt != ptsEit; ++ptsIt)
+             {
+                 const Key var = *ptsIt;
+@@ -722,12 +705,12 @@ public:
+ 
+     /// Methods to support type inquiry through isa, cast, and dyn_cast:
+     ///@{
+-    static inline bool classof(const IncMutableDFPTData<Key, KeySet, Data, DataSet> *)
++    static inline bool classof(const IncMutableDFPTData<Key, Datum, Data> *)
+     {
+         return true;
+     }
+ 
+-    static inline bool classof(const PTData<Key, KeySet, Data, DataSet>* ptd)
++    static inline bool classof(const PTData<Key, Datum, Data>* ptd)
+     {
+         return ptd->getPTDTY() == BasePTData::IncMutDataFlow;
+     }
+@@ -756,7 +739,7 @@ private:
+         return false;
+     }
+     /// Get all var which have new pts informationin loc's IN set
+-    inline const DataSet& getDFInUpdatedVar(LocID loc)
++    inline const Data& getDFInUpdatedVar(LocID loc)
+     {
+         return inUpdatedVarMap[loc];
+     }
+@@ -785,23 +768,25 @@ private:
+         return false;
+     }
+     /// Get all var which have new pts informationin loc's OUT set
+-    inline const DataSet& getDFOutUpdatedVar(LocID loc)
++    inline const Data& getDFOutUpdatedVar(LocID loc)
+     {
+         return outUpdatedVarMap[loc];
+     }
+     //@}
+ };
+ 
+-/// VersionedPTData implemented with mutable points-to set (DataSet).
++/// VersionedPTData implemented with mutable points-to set (Data).
+ /// Implemented as a wrapper around two MutablePTDatas: one for Keys, one
+ /// for VersionedKeys.
+-template <typename Key, typename KeySet, typename Data, typename DataSet, typename VersionedKey, typename VersionedKeySet>
+-class MutableVersionedPTData : public VersionedPTData<Key, KeySet, Data, DataSet, VersionedKey, VersionedKeySet>
++template <typename Key, typename Datum, typename Data, typename VersionedKey>
++class MutableVersionedPTData : public VersionedPTData<Key, Datum, Data, VersionedKey>
+ {
+ public:
+-    typedef PTData<Key, KeySet, Data, DataSet> BasePTData;
+-    typedef VersionedPTData<Key, KeySet, Data, DataSet, VersionedKey, VersionedKeySet> BaseVersionedPTData;
++    typedef PTData<Key, Datum, Data> BasePTData;
++    typedef VersionedPTData<Key, Datum, Data, VersionedKey> BaseVersionedPTData;
+     typedef typename BasePTData::PTDataTy PTDataTy;
++    typedef typename BasePTData::KeySet KeySet;
++    typedef typename BaseVersionedPTData::VersionedKeySet VersionedKeySet;
+ 
+     MutableVersionedPTData(bool reversePT = true, PTDataTy ty = PTDataTy::MutVersioned)
+         : BaseVersionedPTData(reversePT, ty), tlPTData(reversePT), atPTData(reversePT) { }
+@@ -814,31 +799,31 @@ public:
+         atPTData.clear();
+     }
+ 
+-    virtual const DataSet& getPts(const Key& vk) override
++    virtual const Data& getPts(const Key& vk) override
+     {
+         return tlPTData.getPts(vk);
+     }
+-    virtual const DataSet& getPts(const VersionedKey& vk) override
++    virtual const Data& getPts(const VersionedKey& vk) override
+     {
+         return atPTData.getPts(vk);
+     }
+ 
+-    virtual const KeySet& getRevPts(const Data& datum) override
++    virtual const KeySet& getRevPts(const Datum& datum) override
+     {
+         assert(this->rev && "MutableVersionedPTData::getRevPts: constructed without reverse PT support!");
+         return tlPTData.getRevPts(datum);
+     }
+-    virtual const VersionedKeySet& getVersionedKeyRevPts(const Data& datum) override
++    virtual const VersionedKeySet& getVersionedKeyRevPts(const Datum& datum) override
+     {
+         assert(this->rev && "MutableVersionedPTData::getVersionedKeyRevPts: constructed without reverse PT support!");
+         return atPTData.getRevPts(datum);
+     }
+ 
+-    virtual bool addPts(const Key& k, const Data& element) override
++    virtual bool addPts(const Key& k, const Datum& element) override
+     {
+         return tlPTData.addPts(k, element);
+     }
+-    virtual bool addPts(const VersionedKey& vk, const Data& element) override
++    virtual bool addPts(const VersionedKey& vk, const Datum& element) override
+     {
+         return atPTData.addPts(vk, element);
+     }
+@@ -859,20 +844,20 @@ public:
+     {
+         return tlPTData.unionPts(dstVar, atPTData.getPts(srcVar));
+     }
+-    virtual bool unionPts(const Key& dstVar, const DataSet& srcDataSet) override
++    virtual bool unionPts(const Key& dstVar, const Data& srcData) override
+     {
+-        return tlPTData.unionPts(dstVar, srcDataSet);
++        return tlPTData.unionPts(dstVar, srcData);
+     }
+-    virtual bool unionPts(const VersionedKey& dstVar, const DataSet& srcDataSet) override
++    virtual bool unionPts(const VersionedKey& dstVar, const Data& srcData) override
+     {
+-        return atPTData.unionPts(dstVar, srcDataSet);
++        return atPTData.unionPts(dstVar, srcData);
+     }
+ 
+-    virtual void clearPts(const Key& k, const Data& element) override
++    virtual void clearPts(const Key& k, const Datum& element) override
+     {
+         tlPTData.clearPts(k, element);
+     }
+-    virtual void clearPts(const VersionedKey& vk, const Data& element) override
++    virtual void clearPts(const VersionedKey& vk, const Datum& element) override
+     {
+         atPTData.clearPts(vk, element);
+     }
+@@ -896,12 +881,12 @@ public:
+ 
+     /// Methods to support type inquiry through isa, cast, and dyn_cast:
+     ///@{
+-    static inline bool classof(const MutableVersionedPTData<Key, KeySet, Data, DataSet, VersionedKey, VersionedKeySet> *)
++    static inline bool classof(const MutableVersionedPTData<Key, Datum, Data, VersionedKey> *)
+     {
+         return true;
+     }
+ 
+-    static inline bool classof(const PTData<Key, KeySet, Data, DataSet>* ptd)
++    static inline bool classof(const PTData<Key, Datum, Data>* ptd)
+     {
+         return ptd->getPTDTY() == PTDataTy::MutVersioned;
+     }
+@@ -909,9 +894,9 @@ public:
+ 
+ private:
+     /// PTData for Keys (top-level pointers, generally).
+-    MutablePTData<Key, KeySet, Data, DataSet> tlPTData;
++    MutablePTData<Key, Datum, Data> tlPTData;
+     /// PTData for VersionedKeys (address-taken objects, generally).
+-    MutablePTData<VersionedKey, VersionedKeySet, Data, DataSet> atPTData;
++    MutablePTData<VersionedKey, Datum, Data> atPTData;
+ };
+ 
+ } // End namespace SVF
+diff --git a/include/MemoryModel/PointerAnalysis.h b/include/MemoryModel/PointerAnalysis.h
+index 014179e1..44cf7f57 100644
+--- a/include/MemoryModel/PointerAnalysis.h
++++ b/include/MemoryModel/PointerAnalysis.h
+@@ -247,7 +247,7 @@ public:
+ 
+     /// Given an object, get all the nodes having whose pointsto contains the object.
+     /// Similar to getPts, this also needs to be implemented in child classes.
+-    virtual const NodeBS& getRevPts(NodeID nodeId) = 0;
++    virtual const NodeSet& getRevPts(NodeID nodeId) = 0;
+ 
+     /// Clear points-to data
+     virtual void clearPts()
+diff --git a/include/MemoryModel/PointerAnalysisImpl.h b/include/MemoryModel/PointerAnalysisImpl.h
+index 4421e32c..cf9dd00f 100644
+--- a/include/MemoryModel/PointerAnalysisImpl.h
++++ b/include/MemoryModel/PointerAnalysisImpl.h
+@@ -42,15 +42,15 @@ class BVDataPTAImpl : public PointerAnalysis
+ {
+ 
+ public:
+-    typedef PTData<NodeID, NodeBS, NodeID, PointsTo> PTDataTy;
+-    typedef MutablePTData<NodeID, NodeBS, NodeID, PointsTo> MutPTDataTy;
+-    typedef DiffPTData<NodeID, NodeBS, NodeID, PointsTo> DiffPTDataTy;
+-    typedef MutableDiffPTData<NodeID, NodeBS, NodeID, PointsTo> MutDiffPTDataTy;
+-    typedef DFPTData<NodeID, NodeBS, NodeID, PointsTo> DFPTDataTy;
+-    typedef MutableDFPTData<NodeID, NodeBS, NodeID, PointsTo> MutDFPTDataTy;
+-    typedef IncMutableDFPTData<NodeID, NodeBS, NodeID, PointsTo> IncMutDFPTDataTy;
+-    typedef VersionedPTData<NodeID, NodeBS, NodeID, PointsTo, VersionedVar, Set<VersionedVar>> VersionedPTDataTy;
+-    typedef MutableVersionedPTData<NodeID, NodeBS, NodeID, PointsTo, VersionedVar, Set<VersionedVar>> MutVersionedPTDataTy;
++    typedef PTData<NodeID, NodeID, PointsTo> PTDataTy;
++    typedef MutablePTData<NodeID, NodeID, PointsTo> MutPTDataTy;
++    typedef DiffPTData<NodeID, NodeID, PointsTo> DiffPTDataTy;
++    typedef MutableDiffPTData<NodeID, NodeID, PointsTo> MutDiffPTDataTy;
++    typedef DFPTData<NodeID, NodeID, PointsTo> DFPTDataTy;
++    typedef MutableDFPTData<NodeID, NodeID, PointsTo> MutDFPTDataTy;
++    typedef IncMutableDFPTData<NodeID, NodeID, PointsTo> IncMutDFPTDataTy;
++    typedef VersionedPTData<NodeID, NodeID, PointsTo, VersionedVar> VersionedPTDataTy;
++    typedef MutableVersionedPTData<NodeID, NodeID, PointsTo, VersionedVar> MutVersionedPTDataTy;
+ 
+     /// Constructor
+     BVDataPTAImpl(PAG* pag, PointerAnalysis::PTATY type, bool alias_check = true);
+@@ -79,7 +79,7 @@ public:
+     {
+         return ptD->getPts(id);
+     }
+-    virtual inline const NodeBS& getRevPts(NodeID nodeId)
++    virtual inline const NodeSet& getRevPts(NodeID nodeId)
+     {
+         return ptD->getRevPts(nodeId);
+     }
+@@ -179,6 +179,21 @@ protected:
+         return v;
+     }
+ 
++    inline bool hasPtsMap(void) const
++    {
++        return SVFUtil::isa<MutPTDataTy>(ptD) || SVFUtil::isa<MutDiffPTDataTy>(ptD);
++    }
++
++    inline const typename MutPTDataTy::PtsMap& getPtsMap() const
++    {
++        if (MutPTDataTy *m = SVFUtil::dyn_cast<MutPTDataTy>(ptD)) return m->getPtsMap();
++        else if (MutDiffPTDataTy *md = SVFUtil::dyn_cast<MutDiffPTDataTy>(ptD)) return md->getPtsMap();
++        else {
++			assert(false && "BVDataPTAImpl::getPtsMap: not a PTData with a PtsMap!");
++			return SVFUtil::dyn_cast<MutPTDataTy>(ptD)->getPtsMap();
++        }
++    }
++
+     /// On the fly call graph construction
+     virtual void onTheFlyCallGraphSolve(const CallSiteToFunPtrMap& callsites, CallEdgeMap& newEdges);
+ 
+@@ -242,10 +257,10 @@ class CondPTAImpl : public PointerAnalysis
+ public:
+     typedef CondVar<Cond> CVar;
+     typedef CondStdSet<CVar>  CPtSet;
+-    typedef PTData<CVar, Set<CVar>, CVar, CPtSet> PTDataTy;
+-    typedef MutablePTData<CVar, Set<CVar>, CVar, CPtSet> MutPTDataTy;
++    typedef PTData<CVar, CVar, CPtSet> PTDataTy;
++    typedef MutablePTData<CVar, CVar, CPtSet> MutPTDataTy;
+     typedef Map<NodeID,PointsTo> PtrToBVPtsMap; /// map a pointer to its BitVector points-to representation
+-    typedef Map<NodeID, NodeBS> PtrToNSMap;
++    typedef Map<NodeID, NodeSet> PtrToNSMap;
+     typedef Map<NodeID,CPtSet> PtrToCPtsMap;	 /// map a pointer to its conditional points-to set
+ 
+     /// Constructor
+@@ -442,7 +457,7 @@ protected:
+                 for(typename CPtSet::const_iterator cit = it->second.begin(), ecit=it->second.end(); cit!=ecit; ++cit)
+                 {
+                     ptrToBVPtsMap[(it->first).get_id()].set(cit->get_id());
+-                    objToNSRevPtsMap[cit->get_id()].set((it->first).get_id());
++                    objToNSRevPtsMap[cit->get_id()].insert((it->first).get_id());
+                     ptrToCPtsMap[(it->first).get_id()].set(*cit);
+                 }
+             }
+@@ -489,7 +504,7 @@ public:
+         return ptrToCPtsMap[ptr];
+     }
+     /// Given an object return all pointers points to this object
+-    virtual inline NodeBS& getRevPts(NodeID obj)
++    virtual inline NodeSet& getRevPts(NodeID obj)
+     {
+         assert(normalized && "Pts of all context-var have to be merged/normalized. Want to use getPts(CVar cvar)??");
+         return objToNSRevPtsMap[obj];
+diff --git a/include/SVF-FE/CHG.h b/include/SVF-FE/CHG.h
+index f8063eb4..33607e23 100644
+--- a/include/SVF-FE/CHG.h
++++ b/include/SVF-FE/CHG.h
+@@ -168,7 +168,7 @@ private:
+      *
+      * virtualFunctionVectors = {{Af1, Af2, ...}, {Bg1, Bg2, ...}}
+      */
+-    std::vector<FuncVector> virtualFunctionVectors;
++    std::vector<std::vector<const SVFFunction*>> virtualFunctionVectors;
+ };
+ 
+ /// class hierarchy graph
+@@ -216,7 +216,6 @@ public:
+     const CHNodeSetTy& getCSClasses(CallSite cs);
+     void getVFnsFromVtbls(CallSite cs, const VTableSet &vtbls, VFunSet &virtualFunctions) override;
+     void dump(const std::string& filename);
+-    void view();
+     void printCH();
+ 
+     inline s32_t getVirtualFunctionID(const SVFFunction* vfn) const
+@@ -286,9 +285,6 @@ public:
+         return chg->getKind() == Standard;
+     }
+ 
+-protected:
+-    void addFuncToFuncVector(CHNode::FuncVector &v, const SVFFunction *f);
+-
+ private:
+     SVFModule* svfMod;
+     u32_t classNum;
+diff --git a/include/SVF-FE/CPPUtil.h b/include/SVF-FE/CPPUtil.h
+index 6fa83cc0..a1f20e08 100644
+--- a/include/SVF-FE/CPPUtil.h
++++ b/include/SVF-FE/CPPUtil.h
+@@ -47,19 +47,16 @@ struct DemangledName
+ {
+     std::string className;
+     std::string funcName;
+-    bool isThunkFunc;
+ };
+ 
+-struct DemangledName demangle(const std::string &name);
++struct DemangledName demangle(const std::string name);
+ 
+-std::string getBeforeBrackets(const std::string &name);
++std::string getBeforeBrackets(const std::string name);
+ bool isValVtbl(const Value *val);
+ bool isLoadVtblInst(const LoadInst *loadInst);
+ bool isVirtualCallSite(CallSite cs);
+ bool isConstructor(const Function *F);
+ bool isDestructor(const Function *F);
+-bool isCPPThunkFunction(const Function *F);
+-const Function *getThunkTarget(const Function *F);
+ 
+ /*
+  * VtableA = {&A::foo}
+diff --git a/include/SVF-FE/SymbolTableInfo.h b/include/SVF-FE/SymbolTableInfo.h
+index 509826a3..e635c623 100644
+--- a/include/SVF-FE/SymbolTableInfo.h
++++ b/include/SVF-FE/SymbolTableInfo.h
+@@ -423,11 +423,6 @@ public:
+     /// Debug method
+     void printFlattenFields(const Type* type);
+ 
+-    static std::string toString(SYMTYPE symtype);
+-
+-    /// Another debug method
+-    virtual void dump();
+-
+ protected:
+     /// Collect the struct info
+     virtual void collectStructInfo(const StructType *T);
+diff --git a/include/Util/BasicTypes.h b/include/Util/BasicTypes.h
+index eabdec7a..26bf5a48 100644
+--- a/include/Util/BasicTypes.h
++++ b/include/Util/BasicTypes.h
+@@ -253,12 +253,6 @@ public:
+         return getLLVMFun()->isVarArg();
+     }
+ 
+-    // Dump Control Flow Graph of llvm function, with instructions
+-    void viewCFG();
+-
+-    // Dump Control Flow Graph of llvm function, without instructions
+-    void viewCFGOnly();
+-
+ };
+ 
+ class SVFGlobal : public SVFValue
+@@ -312,7 +306,7 @@ template <> struct std::hash<SVF::CallSite> {
+ template <> struct std::hash<llvm::SparseBitVector<>>
+ {
+     size_t operator()(const llvm::SparseBitVector<> &sbv) const {
+-        SVF::Hash<std::pair<std::pair<size_t, size_t>, size_t>> h;
++        std::hash<std::pair<std::pair<size_t, size_t>, size_t>> h;
+         return h(std::make_pair(std::make_pair(sbv.count(), sbv.find_first()), sbv.find_last()));
+     }
+ };
+diff --git a/include/Util/DPItem.h b/include/Util/DPItem.h
+index fd3abbff..b237bcda 100644
+--- a/include/Util/DPItem.h
++++ b/include/Util/DPItem.h
+@@ -799,7 +799,7 @@ struct std::hash<SVF::CxtDPItem>
+ {
+     size_t operator()(const SVF::CxtDPItem &cdpi) const
+     {
+-        SVF::Hash<std::pair<SVF::NodeID, SVF::ContextCond>> h;
++        std::hash<std::pair<SVF::NodeID, SVF::ContextCond>> h;
+         return h(std::make_pair(cdpi.getCurNodeID(), cdpi.getContexts()));
+     }
+ };
+@@ -810,7 +810,7 @@ struct std::hash<SVF::StmtDPItem<LocCond>>
+ {
+     size_t operator()(const SVF::StmtDPItem<LocCond> &sdpi) const
+     {
+-        SVF::Hash<std::pair<SVF::NodeID, const LocCond *>> h;
++        std::hash<std::pair<SVF::NodeID, const LocCond *>> h;
+         return h(std::make_pair(sdpi.getCurNodeID(), sdpi.getLoc()));
+     }
+ };
+@@ -821,7 +821,7 @@ struct std::hash<SVF::CxtStmtDPItem<LocCond>>
+ {
+     size_t operator()(const SVF::CxtStmtDPItem<LocCond> &csdpi) const
+     {
+-        SVF::Hash<std::pair<SVF::NodeID, std::pair<const LocCond *, SVF::ContextCond>>> h;
++        std::hash<std::pair<SVF::NodeID, std::pair<const LocCond *, SVF::ContextCond>>> h;
+         return h(std::make_pair(csdpi.getCurNodeID(),
+                                 std::make_pair(csdpi.getLoc(), csdpi.getCond())));
+     }
+diff --git a/include/Util/Options.h b/include/Util/Options.h
+index a78a598a..579a9dbb 100644
+--- a/include/Util/Options.h
++++ b/include/Util/Options.h
+@@ -4,9 +4,6 @@
+ #define OPTIONS_H_
+ 
+ #include "Util/NodeIDAllocator.h"
+-#include <sstream>
+-#include "MemoryModel/PointerAnalysisImpl.h"
+-#include "WPA/WPAPass.h"
+ 
+ namespace SVF
+ {
+@@ -30,179 +27,8 @@ public:
+ 
+     /// Maximum number of field derivations for an object.
+     static const llvm::cl::opt<unsigned> MaxFieldLimit;
+-
+-    // ContextDDA.cpp
+-    static const llvm::cl::opt<unsigned long long> CxtBudget;
+-
+-    // DDAClient.cpp
+-    static const llvm::cl::opt<bool> SingleLoad;
+-    static const llvm::cl::opt<bool> DumpFree;
+-    static const llvm::cl::opt<bool> DumpUninitVar;
+-    static const llvm::cl::opt<bool> DumpUninitPtr;
+-    static const llvm::cl::opt<bool> DumpSUPts;
+-    static const llvm::cl::opt<bool> DumpSUStore;
+-    static const llvm::cl::opt<bool> MallocOnly;
+-    static const llvm::cl::opt<bool> TaintUninitHeap;
+-    static const llvm::cl::opt<bool> TaintUninitStack;
+-
+-    // DDAPass.cpp
+-    static const llvm::cl::opt<unsigned> MaxPathLen;
+-    static const llvm::cl::opt<unsigned> MaxContextLen;
+-    static const llvm::cl::opt<std :: string> UserInputQuery;
+-    static const llvm::cl::opt<bool> InsenRecur;
+-    static const llvm::cl::opt<bool> InsenCycle;
+-    static const llvm::cl::opt<bool> PrintCPts;
+-    static const llvm::cl::opt<bool> PrintQueryPts;
+-    static const llvm::cl::opt<bool> WPANum;
+-    static llvm::cl::bits<PointerAnalysis::PTATY> DDASelected;
+-
+-    // FlowDDA.cpp
+-    static const llvm::cl::opt<unsigned long long> FlowBudget;
+-
+-    // Offline constraint graph (OfflineConsG.cpp)
+-    static const llvm::cl::opt<bool> OCGDotGraph;
+-
+-    // Program Assignment Graph for pointer analysis (PAG.cpp)
+-    static llvm::cl::opt<bool> HandBlackHole;
+-    static const llvm::cl::opt<bool> FirstFieldEqBase;
+-
+-    // SVFG optimizer (SVFGOPT.cpp)
+-    static const llvm::cl::opt<bool> ContextInsensitive;
+-    static const llvm::cl::opt<bool> KeepAOFI;
+-    static const llvm::cl::opt<std::string> SelfCycle;
+-
+-    // Sparse value-flow graph (VFG.cpp)
+-    static const llvm::cl::opt<bool> DumpVFG;
+-
+-     // Location set for modeling abstract memory object (LocationSet.cpp)
+-    static const llvm::cl::opt<bool> SingleStride;
+-
+-    // Base class of pointer analyses (PointerAnalysis.cpp)
+-    static const llvm::cl::opt<bool> TypePrint;
+-    static const llvm::cl::opt<bool> FuncPointerPrint;
+-    static const llvm::cl::opt<bool> PTSPrint;
+-    static const llvm::cl::opt<bool> PTSAllPrint;
+-    static const llvm::cl::opt<bool> PStat;
+-    static const llvm::cl::opt<unsigned> StatBudget;
+-    static const llvm::cl::opt<bool> PAGDotGraph;
+-    static const llvm::cl::opt<bool> PAGDotGraphShorter;
+-    static const llvm::cl::opt<bool> DumpICFG;
+-    static const llvm::cl::opt<bool> CallGraphDotGraph;
+-    static const llvm::cl::opt<bool> PAGPrint;
+-    static const llvm::cl::opt<unsigned> IndirectCallLimit;
+-    static const llvm::cl::opt<bool> UsePreCompFieldSensitive;
+-    static const llvm::cl::opt<bool> EnableAliasCheck;
+-    static const llvm::cl::opt<bool> EnableThreadCallGraph;
+-    static const llvm::cl::opt<bool> ConnectVCallOnCHA;
+-
+-    // PointerAnalysisImpl.cpp
+-    static const llvm::cl::opt<bool> INCDFPTData;
+-
+-    // Memory region (MemRegion.cpp)
+-    static const llvm::cl::opt<bool> IgnoreDeadFun;
+-
+-    // Base class of pointer analyses (MemSSA.cpp)
+-    static const llvm::cl::opt<bool> DumpMSSA;
+-    static const llvm::cl::opt<std :: string> MSSAFun;
+-    // static const llvm::cl::opt<string> MSSAFun;
+-    static const llvm::cl::opt<std::string> MemPar;
+-
+-    // SVFG builder (SVFGBuilder.cpp)
+-    static const llvm::cl::opt<bool> SVFGWithIndirectCall;
+-    static const llvm::cl::opt<bool> SingleVFG;
+-    static llvm::cl::opt<bool> OPTSVFG;
+-
+-    // FSMPTA.cpp
+-    static const llvm::cl::opt<bool> UsePCG;
+-    static const llvm::cl::opt<bool> IntraLock;
+-    static const llvm::cl::opt<bool> ReadPrecisionTDEdge;
+-    static const llvm::cl::opt<u32_t> AddModelFlag;
+-
+-    // LockAnalysis.cpp
+-    static const llvm::cl::opt<bool> PrintLockSpan;
+-
+-    // MHP.cpp
+-    static const llvm::cl::opt<bool> PrintInterLev;
+-    static const llvm::cl::opt<bool> DoLockAnalysis;
+-
+-    // MTA.cpp
+-    static const llvm::cl::opt<bool> AndersenAnno;
+-    static const llvm::cl::opt<bool> FSAnno;
+-
+-    // MTAAnnotator.cpp
+-    static const llvm::cl::opt<u32_t> AnnoFlag;
+-
+-    // MTAResultValidator.cpp
+-    static const llvm::cl::opt<bool> PrintValidRes;
+-
+-    //MTAStat.cpp
+-    static const llvm::cl::opt<bool> AllPairMHP;
+-
+-    // PCG.cpp
+-    //const llvm::cl::opt<bool> TDPrint
+-
+-    // TCT.cpp
+-    static const llvm::cl::opt<bool> TCTDotGraph;
+-
+-    // LeakChecker.cpp
+-    static const llvm::cl::opt<bool> ValidateTests;
+-
+-    // Source-sink analyzer (SrcSnkDDA.cpp)
+-    static const llvm::cl::opt<bool> DumpSlice;
+-    static const llvm::cl::opt<unsigned> CxtLimit;
+-
+-    // CHG.cpp
+-    static const llvm::cl::opt<bool> DumpCHA;
+-
+-    // DCHG.cpp
+-    static const llvm::cl::opt<bool> PrintDCHG;
+-
+-    // LLVMModule.cpp
+-    static const llvm::cl::opt<std::string> Graphtxt;
+-    static const llvm::cl::opt<bool> SVFMain;
+-
+-    // SymbolTableInfo.cpp
+-    static const llvm::cl::opt<bool> LocMemModel;
+-    static const llvm::cl::opt<bool> ModelConsts;
+-    static const llvm::cl::opt<bool> SymTabPrint;
+-
+-    // Conditions.cpp
+-    static const llvm::cl::opt<unsigned> MaxBddSize;
+-
+-    // PathCondAllocator.cpp
+-    static const llvm::cl::opt<bool> PrintPathCond;
+-
+-    // SVFUtil.cpp
+-    static const llvm::cl::opt<bool> DisableWarn;
+-
+-    // Andersen.cpp
+-    static const llvm::cl::opt<bool> ConsCGDotGraph;
+-    static const llvm::cl::opt<bool> BriefConsCGDotGraph;
+-    static const llvm::cl::opt<bool> PrintCGGraph;
+-    // static const llvm::cl::opt<string> WriteAnder;
+-    static const llvm::cl::opt<std :: string> WriteAnder;
+-    // static const llvm::cl::opt<string> ReadAnder;
+-    static const llvm::cl::opt<std :: string> ReadAnder;
+-    static const llvm::cl::opt<bool> PtsDiff;
+-    static const llvm::cl::opt<bool> MergePWC;
+-
+-    // FlowSensitive.cpp
+-    static const llvm::cl::opt<bool> CTirAliasEval;
+-
+-    //FlowSensitiveTBHC.cpp
+-    static const llvm::cl::opt<bool> TBHCStoreReuse;
+-    static const llvm::cl::opt<bool> TBHCAllReuse;;
+-
+-    // TypeAnalysis.cpp
+-    static const llvm::cl::opt<bool> GenICFG;
+-
+-    //WPAPass.cpp
+-    static const llvm::cl::opt<bool> AnderSVFG;
+-    static const llvm::cl::opt<bool> PrintAliases;
+-    static llvm::cl::bits<PointerAnalysis::PTATY> PASelected;
+-    static llvm::cl::bits<WPAPass::AliasCheckRule> AliasRule;
+-
+ };
++
+ };  // namespace SVF
+ 
+ #endif  // ifdef OPTIONS_H_
+diff --git a/include/Util/SVFBasicTypes.h b/include/Util/SVFBasicTypes.h
+index 2253b68c..90819a3c 100644
+--- a/include/Util/SVFBasicTypes.h
++++ b/include/Util/SVFBasicTypes.h
+@@ -48,30 +48,6 @@
+ namespace SVF
+ {
+ 
+-/// provide extra hash function for std::pair handling
+-template <class T> struct Hash;
+-
+-template <class S, class T> struct Hash<std::pair<S, T>> {
+-    // Pairing function from: http://szudzik.com/ElegantPairing.pdf
+-    static size_t szudzik(size_t a, size_t b)
+-    {
+-        return a > b ? b * b + a : a * a + a + b;
+-    }
+-
+-    size_t operator()(const std::pair<S, T> &t) const {
+-        Hash<decltype(t.first)> first;
+-        Hash<decltype(t.second)> second;
+-        return szudzik(first(t.first), second(t.second));
+-    }
+-};
+-
+-template <class T> struct Hash {
+-    size_t operator()(const T &t) const {
+-        std::hash<T> h;
+-        return h(t);
+-    }
+-};
+-
+ typedef unsigned u32_t;
+ typedef unsigned long long u64_t;
+ typedef signed s32_t;
+@@ -88,11 +64,11 @@ typedef llvm::SparseBitVector<> NodeBS;
+ typedef NodeBS PointsTo;
+ typedef PointsTo AliasSet;
+ 
+-template <typename Key, typename Hash = Hash<Key>, typename KeyEqual = std::equal_to<Key>,
++template <typename Key, typename Hash = std::hash<Key>, typename KeyEqual = std::equal_to<Key>,
+           typename Allocator = std::allocator<Key>> 
+ using Set = std::unordered_set<Key, Hash, KeyEqual, Allocator>;
+ 
+-template<typename Key, typename Value, typename Hash = Hash<Key>,
++template<typename Key, typename Value, typename Hash = std::hash<Key>,
+     typename KeyEqual = std::equal_to<Key>,
+     typename Allocator = std::allocator<std::pair<const Key, Value>>>
+ using Map = std::unordered_map<Key, Value, Hash, KeyEqual, Allocator>;
+@@ -233,8 +209,24 @@ public:
+     }
+ };
+ 
++
++
+ } // End namespace SVF
+ 
++/// Specialise hash for pairs.
++template <typename T, typename U> struct std::hash<std::pair<T, U>> {
++    // Pairing function from: http://szudzik.com/ElegantPairing.pdf
++    static size_t szudzik(size_t a, size_t b)
++    {
++        return a > b ? b * b + a : a * a + a + b;
++    }
++
++    size_t operator()(const std::pair<T, U> &p) const {
++        std::hash<T> h1;
++        std::hash<U> h2;
++        return szudzik(h1(p.first), h2(p.second));
++    }
++};
+ 
+ /// Specialise hash for SmallVectors.
+ template <typename T, unsigned N>
+@@ -246,7 +238,7 @@ struct std::hash<SVF::SmallVector<T, N>>
+ 
+         // Iterate and accumulate the hash.
+         size_t hash = 0;
+-        SVF::Hash<std::pair<T, size_t>> hts;
++        std::hash<std::pair<T, size_t>> hts;
+         std::hash<T> ht;
+         for (const T &t : sv)
+         {
+diff --git a/include/Util/SVFUtil.h b/include/Util/SVFUtil.h
+index 313ce895..bf14f137 100644
+--- a/include/Util/SVFUtil.h
++++ b/include/Util/SVFUtil.h
+@@ -227,7 +227,6 @@ inline const SVFFunction* getCallee(const Instruction *inst)
+ //@{
+ std::string  getSourceLoc(const Value *val);
+ std::string  getSourceLocOfFunction(const Function *F);
+-const std::string value2String(const Value* value);
+ //@}
+ 
+ } // End namespace SVFUtil
+diff --git a/include/WPA/VersionedFlowSensitive.h b/include/WPA/VersionedFlowSensitive.h
+index 27daf46e..9f50452c 100644
+--- a/include/WPA/VersionedFlowSensitive.h
++++ b/include/WPA/VersionedFlowSensitive.h
+@@ -173,7 +173,7 @@ private:
+     FIFOWorkList<NodeID> vWorklist;
+ 
+     /// Points-to DS for working with versions.
+-    BVDataPTAImpl::VersionedPTDataTy *vPtD;
++    VersionedPTData<NodeID, NodeID, PointsTo, VersionedVar> *vPtD;
+ 
+     /// Additional statistics.
+     //@{

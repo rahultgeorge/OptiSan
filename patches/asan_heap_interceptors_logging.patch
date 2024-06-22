@@ -1,0 +1,773 @@
+diff --git a/compiler-rt/lib/asan/asan_allocator.cpp b/compiler-rt/lib/asan/asan_allocator.cpp
+index 65c51fbafdd0..4d5aeda2fba9 100644
+--- a/compiler-rt/lib/asan/asan_allocator.cpp
++++ b/compiler-rt/lib/asan/asan_allocator.cpp
+@@ -404,8 +404,8 @@ struct Allocator {
+     if (!m) return false;
+     if (m->chunk_state != CHUNK_ALLOCATED) return false;
+     if (m->Beg() != addr) return false;
+-    atomic_store((atomic_uint32_t *)&m->alloc_context_id, StackDepotPut(*stack),
+-                 memory_order_relaxed);
++    //Disable logging
++    //atomic_store((atomic_uint32_t *)&m->alloc_context_id, StackDepotPut(*stack),memory_order_relaxed);
+     return true;
+   }
+ 
+@@ -522,8 +522,8 @@ struct Allocator {
+       meta[1] = chunk_beg;
+     }
+     m->user_requested_alignment_log = user_requested_alignment_log;
+-
+-    m->alloc_context_id = StackDepotPut(*stack);
++    //Disable logging
++    //m->alloc_context_id = StackDepotPut(*stack);
+ 
+     uptr size_rounded_down_to_granularity =
+         RoundDownTo(size, SHADOW_GRANULARITY);
+@@ -549,7 +549,7 @@ struct Allocator {
+     void *res = reinterpret_cast<void *>(user_beg);
+     if (can_fill && fl.max_malloc_fill_size) {
+       uptr fill_size = Min(size, (uptr)fl.max_malloc_fill_size);
+-      REAL(memset)(res, fl.malloc_fill_byte, fill_size);
++      memset(res, fl.malloc_fill_byte, fill_size);
+     }
+ #if CAN_SANITIZE_LEAKS
+     m->lsan_tag = __lsan::DisabledInThisThread() ? __lsan::kIgnored
+@@ -587,7 +587,8 @@ struct Allocator {
+       CHECK_EQ(m->free_tid, kInvalidTid);
+     AsanThread *t = GetCurrentThread();
+     m->free_tid = t ? t->tid() : 0;
+-    m->free_context_id = StackDepotPut(*stack);
++   //Disable logging 
++   //m->free_context_id = StackDepotPut(*stack);
+ 
+     Flags &fl = *flags();
+     if (fl.max_free_fill_size > 0) {
+@@ -596,7 +597,7 @@ struct Allocator {
+       if (m->UsedSize() >= kChunkHeader2Size) {  // Skip Header2 in user area.
+         uptr size_to_fill = m->UsedSize() - kChunkHeader2Size;
+         size_to_fill = Min(size_to_fill, (uptr)fl.max_free_fill_size);
+-        REAL(memset)((void *)scribble_start, fl.free_fill_byte, size_to_fill);
++        memset((void *)scribble_start, fl.free_fill_byte, size_to_fill);
+       }
+     }
+ 
+@@ -679,11 +680,11 @@ struct Allocator {
+       u8 chunk_state = m->chunk_state;
+       if (chunk_state != CHUNK_ALLOCATED)
+         ReportInvalidFree(old_ptr, chunk_state, stack);
+-      CHECK_NE(REAL(memcpy), nullptr);
++      //CHECK_NE(REAL(memcpy), nullptr);
+       uptr memcpy_size = Min(new_size, m->UsedSize());
+       // If realloc() races with free(), we may start copying freed memory.
+       // However, we will report racy double-free later anyway.
+-      REAL(memcpy)(new_ptr, old_ptr, memcpy_size);
++      memcpy(new_ptr, old_ptr, memcpy_size);
+       Deallocate(old_ptr, 0, 0, stack, FROM_MALLOC);
+     }
+     return new_ptr;
+@@ -699,7 +700,7 @@ struct Allocator {
+     // If the memory comes from the secondary allocator no need to clear it
+     // as it comes directly from mmap.
+     if (ptr && allocator.FromPrimary(ptr))
+-      REAL(memset)(ptr, 0, nmemb * size);
++      memset(ptr, 0, nmemb * size);
+     return ptr;
+   }
+ 
+@@ -835,7 +836,9 @@ AllocType AsanChunkView::GetAllocType() const {
+ 
+ static StackTrace GetStackTraceFromId(u32 id) {
+   CHECK(id);
+-  StackTrace res = StackDepotGet(id);
++  // Disable logging
++  //StackTrace res = StackDepotGet(id);
++  StackTrace res;
+   CHECK(res.trace);
+   return res;
+ }
+diff --git a/compiler-rt/lib/asan/asan_fake_stack.cpp b/compiler-rt/lib/asan/asan_fake_stack.cpp
+index 295e6debc96c..6cf9e6e0b411 100644
+--- a/compiler-rt/lib/asan/asan_fake_stack.cpp
++++ b/compiler-rt/lib/asan/asan_fake_stack.cpp
+@@ -276,7 +276,7 @@ void __asan_alloca_poison(uptr addr, uptr size) {
+ SANITIZER_INTERFACE_ATTRIBUTE
+ void __asan_allocas_unpoison(uptr top, uptr bottom) {
+   if ((!top) || (top > bottom)) return;
+-  REAL(memset)(reinterpret_cast<void*>(MemToShadow(top)), 0,
++  memset(reinterpret_cast<void*>(MemToShadow(top)), 0,
+                (bottom - top) / SHADOW_GRANULARITY);
+ }
+ } // extern "C"
+diff --git a/compiler-rt/lib/asan/asan_flags.inc b/compiler-rt/lib/asan/asan_flags.inc
+index 43c70dbca56b..87fe86c9887f 100644
+--- a/compiler-rt/lib/asan/asan_flags.inc
++++ b/compiler-rt/lib/asan/asan_flags.inc
+@@ -92,7 +92,8 @@ ASAN_FLAG(bool, protect_shadow_gap, !SANITIZER_RTEMS,
+ ASAN_FLAG(bool, print_stats, false,
+           "Print various statistics after printing an error message or if "
+           "atexit=1.")
+-ASAN_FLAG(bool, print_legend, true, "Print the legend for the shadow bytes.")
++//Disable logging
++ASAN_FLAG(bool, print_legend, false, "Print the legend for the shadow bytes.")
+ ASAN_FLAG(bool, print_scariness, false,
+           "Print the scariness score. Experimental.")
+ ASAN_FLAG(bool, atexit, false,
+diff --git a/compiler-rt/lib/asan/asan_globals.cpp b/compiler-rt/lib/asan/asan_globals.cpp
+index 9d7dbc6f264c..c3aa0b3bf572 100644
+--- a/compiler-rt/lib/asan/asan_globals.cpp
++++ b/compiler-rt/lib/asan/asan_globals.cpp
+@@ -358,7 +358,9 @@ void __asan_unregister_elf_globals(uptr *flag, void *start, void *stop) {
+ void __asan_register_globals(__asan_global *globals, uptr n) {
+   if (!flags()->report_globals) return;
+   GET_STACK_TRACE_MALLOC;
+-  u32 stack_id = StackDepotPut(stack);
++  // Disable malloc
++  //u32 stack_id = StackDepotPut(stack);
++  u32 stack_id=0;
+   BlockingMutexLock lock(&mu_for_globals);
+   if (!global_registration_site_vector) {
+     global_registration_site_vector =
+diff --git a/compiler-rt/lib/asan/asan_interceptors.cpp b/compiler-rt/lib/asan/asan_interceptors.cpp
+index b19cf25c7cd0..b78a0d9a7052 100644
+--- a/compiler-rt/lib/asan/asan_interceptors.cpp
++++ b/compiler-rt/lib/asan/asan_interceptors.cpp
+@@ -146,6 +146,7 @@ DECLARE_REAL_AND_INTERCEPTOR(void, free, void *)
+     *begin = *end = 0;                                                         \
+   }
+ 
++/*
+ #define COMMON_INTERCEPTOR_MEMMOVE_IMPL(ctx, to, from, size) \
+   do {                                                       \
+     ASAN_INTERCEPTOR_ENTER(ctx, memmove);                    \
+@@ -163,7 +164,7 @@ DECLARE_REAL_AND_INTERCEPTOR(void, free, void *)
+     ASAN_INTERCEPTOR_ENTER(ctx, memset);                    \
+     ASAN_MEMSET_IMPL(ctx, block, c, size);                  \
+   } while (false)
+-
++*/
+ #if CAN_SANITIZE_LEAKS
+ #define COMMON_INTERCEPTOR_STRERROR()                       \
+   __lsan::ScopedInterceptorDisabler disabler
+@@ -205,6 +206,7 @@ static thread_return_t THREAD_CALLING_CONV asan_thread_start(void *arg) {
+   return t->ThreadStart(GetTid(), &param->is_registered);
+ }
+ 
++/*
+ INTERCEPTOR(int, pthread_create, void *thread,
+     void *attr, void *(*start_routine)(void*), void *arg) {
+   EnsureMainThreadIDIsCorrect();
+@@ -249,7 +251,7 @@ INTERCEPTOR(int, pthread_create, void *thread,
+ INTERCEPTOR(int, pthread_join, void *t, void **arg) {
+   return real_pthread_join(t, arg);
+ }
+-
++*/
+ DEFINE_REAL_PTHREAD_FUNCTIONS
+ #endif  // ASAN_INTERCEPT_PTHREAD_CREATE
+ 
+@@ -265,7 +267,7 @@ static void ClearShadowMemoryForContextStack(uptr stack, uptr ssize) {
+     PoisonShadow(bottom, ssize, 0);
+   }
+ }
+-
++/*
+ INTERCEPTOR(int, swapcontext, struct ucontext_t *oucp,
+             struct ucontext_t *ucp) {
+   static bool reported_warning = false;
+@@ -295,6 +297,7 @@ INTERCEPTOR(int, swapcontext, struct ucontext_t *oucp,
+   ClearShadowMemoryForContextStack(stack, ssize);
+   return res;
+ }
++*/
+ #endif  // ASAN_INTERCEPT_SWAPCONTEXT
+ 
+ #if SANITIZER_NETBSD
+@@ -302,6 +305,7 @@ INTERCEPTOR(int, swapcontext, struct ucontext_t *oucp,
+ #define siglongjmp __siglongjmp14
+ #endif
+ 
++/*
+ INTERCEPTOR(void, longjmp, void *env, int val) {
+   __asan_handle_no_return();
+   REAL(longjmp)(env, val);
+@@ -565,6 +569,8 @@ INTERCEPTOR(long long, atoll, const char *nptr) {
+ }
+ #endif  // ASAN_INTERCEPT_ATOLL_AND_STRTOLL
+ 
++
++
+ #if ASAN_INTERCEPT___CXA_ATEXIT || ASAN_INTERCEPT_ATEXIT
+ static void AtCxaAtexit(void *unused) {
+   (void)unused;
+@@ -622,6 +628,7 @@ INTERCEPTOR(int, pthread_atfork, void (*prepare)(), void (*parent)(),
+ DEFINE_REAL(int, vfork)
+ DECLARE_EXTERN_INTERCEPTOR_AND_WRAPPER(int, vfork)
+ #endif
++*/
+ 
+ // ---------------------- InitializeAsanInterceptors ---------------- {{{1
+ namespace __asan {
+@@ -633,7 +640,7 @@ void InitializeAsanInterceptors() {
+   InitializeSignalInterceptors();
+ 
+   // Intercept str* functions.
+-  ASAN_INTERCEPT_FUNC(strcat);
++/*  ASAN_INTERCEPT_FUNC(strcat);
+   ASAN_INTERCEPT_FUNC(strcpy);
+   ASAN_INTERCEPT_FUNC(strncat);
+   ASAN_INTERCEPT_FUNC(strncpy);
+@@ -653,6 +660,7 @@ void InitializeAsanInterceptors() {
+   ASAN_INTERCEPT_FUNC(strtoll);
+ #endif
+ 
++
+   // Intecept jump-related functions.
+   ASAN_INTERCEPT_FUNC(longjmp);
+ 
+@@ -711,6 +719,7 @@ void InitializeAsanInterceptors() {
+ #if ASAN_INTERCEPT_VFORK
+   ASAN_INTERCEPT_FUNC(vfork);
+ #endif
++*/
+ 
+   InitializePlatformInterceptors();
+ 
+diff --git a/compiler-rt/lib/asan/asan_interceptors.h b/compiler-rt/lib/asan/asan_interceptors.h
+index 344a64bd83d3..a210176df700 100644
+--- a/compiler-rt/lib/asan/asan_interceptors.h
++++ b/compiler-rt/lib/asan/asan_interceptors.h
+@@ -17,6 +17,8 @@
+ #include "asan_interceptors_memintrinsics.h"
+ #include "interception/interception.h"
+ #include "sanitizer_common/sanitizer_platform_interceptors.h"
++//Added to include real memset etc
++#include <string.h>
+ 
+ namespace __asan {
+ 
+diff --git a/compiler-rt/lib/asan/asan_interceptors_memintrinsics.h b/compiler-rt/lib/asan/asan_interceptors_memintrinsics.h
+index 632f0515a9eb..ee17b66de452 100644
+--- a/compiler-rt/lib/asan/asan_interceptors_memintrinsics.h
++++ b/compiler-rt/lib/asan/asan_interceptors_memintrinsics.h
+@@ -17,7 +17,7 @@
+ #include "asan_internal.h"
+ #include "asan_mapping.h"
+ #include "interception/interception.h"
+-
++#include <string.h>
+ DECLARE_REAL(void*, memcpy, void *to, const void *from, uptr size)
+ DECLARE_REAL(void*, memset, void *block, int c, uptr size)
+ 
+@@ -82,7 +82,7 @@ struct AsanInterceptorContext {
+   do {                                                                  \
+     if (UNLIKELY(!asan_inited)) return internal_memcpy(to, from, size); \
+     if (asan_init_is_running) {                                         \
+-      return REAL(memcpy)(to, from, size);                              \
++      return memcpy(to, from, size);                              \
+     }                                                                   \
+     ENSURE_ASAN_INITED();                                               \
+     if (flags()->replace_intrin) {                                      \
+@@ -92,7 +92,7 @@ struct AsanInterceptorContext {
+       ASAN_READ_RANGE(ctx, from, size);                                 \
+       ASAN_WRITE_RANGE(ctx, to, size);                                  \
+     }                                                                   \
+-    return REAL(memcpy)(to, from, size);                                \
++    return memcpy(to, from, size);                                \
+   } while (0)
+ 
+ // memset is called inside Printf.
+@@ -100,13 +100,13 @@ struct AsanInterceptorContext {
+   do {                                                                  \
+     if (UNLIKELY(!asan_inited)) return internal_memset(block, c, size); \
+     if (asan_init_is_running) {                                         \
+-      return REAL(memset)(block, c, size);                              \
++      return memset(block, c, size);                              \
+     }                                                                   \
+     ENSURE_ASAN_INITED();                                               \
+     if (flags()->replace_intrin) {                                      \
+       ASAN_WRITE_RANGE(ctx, block, size);                               \
+     }                                                                   \
+-    return REAL(memset)(block, c, size);                                \
++    return memset(block, c, size);                                \
+   } while (0)
+ 
+ #define ASAN_MEMMOVE_IMPL(ctx, to, from, size)                           \
+diff --git a/compiler-rt/lib/asan/asan_malloc_linux.cpp b/compiler-rt/lib/asan/asan_malloc_linux.cpp
+index faa8968a5d00..dce68459a208 100644
+--- a/compiler-rt/lib/asan/asan_malloc_linux.cpp
++++ b/compiler-rt/lib/asan/asan_malloc_linux.cpp
+@@ -119,6 +119,8 @@ static void *ReallocFromLocalPool(void *ptr, uptr size) {
+   return new_ptr;
+ }
+ 
++// Start comment here - heap interceptors
++/*
+ INTERCEPTOR(void, free, void *ptr) {
+   GET_STACK_TRACE_FREE;
+   if (UNLIKELY(IsInDlsymAllocPool(ptr))) {
+@@ -165,6 +167,8 @@ INTERCEPTOR(void*, realloc, void *ptr, uptr size) {
+   return asan_realloc(ptr, size, &stack);
+ }
+ 
++
++
+ #if SANITIZER_INTERCEPT_REALLOCARRAY
+ INTERCEPTOR(void*, reallocarray, void *ptr, uptr nmemb, uptr size) {
+   ENSURE_ASAN_INITED();
+@@ -242,6 +246,8 @@ INTERCEPTOR(void*, pvalloc, uptr size) {
+ INTERCEPTOR(void, malloc_stats, void) {
+   __asan_print_accumulated_stats();
+ }
++*/
++// End comment here
+ 
+ #if SANITIZER_ANDROID
+ // Format of __libc_malloc_dispatch has changed in Android L.
+diff --git a/compiler-rt/lib/asan/asan_new_delete.cpp b/compiler-rt/lib/asan/asan_new_delete.cpp
+index 5dfcc00fd5d1..8a792a814cd6 100644
+--- a/compiler-rt/lib/asan/asan_new_delete.cpp
++++ b/compiler-rt/lib/asan/asan_new_delete.cpp
+@@ -71,6 +71,7 @@ enum class align_val_t: size_t {};
+ // TODO(alekseyshl): throw std::bad_alloc instead of dying on OOM.
+ // For local pool allocation, align to SHADOW_GRANULARITY to match asan
+ // allocator behavior.
++
+ #define OPERATOR_NEW_BODY(type, nothrow)            \
+   MAYBE_ALLOCATE_FROM_LOCAL_POOL(nothrow);          \
+   GET_STACK_TRACE_MALLOC;                           \
+@@ -86,6 +87,7 @@ enum class align_val_t: size_t {};
+     ReportOutOfMemory(size, &stack);                          \
+   return res;
+ 
++
+ // On OS X it's not enough to just provide our own 'operator new' and
+ // 'operator delete' implementations, because they're going to be in the
+ // runtime dylib, and the main executable will depend on both the runtime
+@@ -93,47 +95,51 @@ enum class align_val_t: size_t {};
+ // delete.
+ // To make sure that C++ allocation/deallocation operators are overridden on
+ // OS X we need to intercept them using their mangled names.
++
++
+ #if !SANITIZER_MAC
++/*
+ CXX_OPERATOR_ATTRIBUTE
+ void *operator new(size_t size)
+-{ OPERATOR_NEW_BODY(FROM_NEW, false /*nothrow*/); }
++{ OPERATOR_NEW_BODY(FROM_NEW, false); }
+ CXX_OPERATOR_ATTRIBUTE
+ void *operator new[](size_t size)
+-{ OPERATOR_NEW_BODY(FROM_NEW_BR, false /*nothrow*/); }
++{ OPERATOR_NEW_BODY(FROM_NEW_BR, false ); }
+ CXX_OPERATOR_ATTRIBUTE
+ void *operator new(size_t size, std::nothrow_t const&)
+-{ OPERATOR_NEW_BODY(FROM_NEW, true /*nothrow*/); }
++{ OPERATOR_NEW_BODY(FROM_NEW, true); }
+ CXX_OPERATOR_ATTRIBUTE
+ void *operator new[](size_t size, std::nothrow_t const&)
+-{ OPERATOR_NEW_BODY(FROM_NEW_BR, true /*nothrow*/); }
++{ OPERATOR_NEW_BODY(FROM_NEW_BR, true ); }
+ CXX_OPERATOR_ATTRIBUTE
+ void *operator new(size_t size, std::align_val_t align)
+-{ OPERATOR_NEW_BODY_ALIGN(FROM_NEW, false /*nothrow*/); }
++{ OPERATOR_NEW_BODY_ALIGN(FROM_NEW, false ); }
+ CXX_OPERATOR_ATTRIBUTE
+ void *operator new[](size_t size, std::align_val_t align)
+-{ OPERATOR_NEW_BODY_ALIGN(FROM_NEW_BR, false /*nothrow*/); }
++{ OPERATOR_NEW_BODY_ALIGN(FROM_NEW_BR, false ); }
+ CXX_OPERATOR_ATTRIBUTE
+ void *operator new(size_t size, std::align_val_t align, std::nothrow_t const&)
+-{ OPERATOR_NEW_BODY_ALIGN(FROM_NEW, true /*nothrow*/); }
++{ OPERATOR_NEW_BODY_ALIGN(FROM_NEW, true ); }
+ CXX_OPERATOR_ATTRIBUTE
+ void *operator new[](size_t size, std::align_val_t align, std::nothrow_t const&)
+-{ OPERATOR_NEW_BODY_ALIGN(FROM_NEW_BR, true /*nothrow*/); }
+-
++{ OPERATOR_NEW_BODY_ALIGN(FROM_NEW_BR, true ); }
++*/
+ #else  // SANITIZER_MAC
+ INTERCEPTOR(void *, _Znwm, size_t size) {
+-  OPERATOR_NEW_BODY(FROM_NEW, false /*nothrow*/);
++  OPERATOR_NEW_BODY(FROM_NEW, false);
+ }
+ INTERCEPTOR(void *, _Znam, size_t size) {
+-  OPERATOR_NEW_BODY(FROM_NEW_BR, false /*nothrow*/);
++  OPERATOR_NEW_BODY(FROM_NEW_BR, false );
+ }
+ INTERCEPTOR(void *, _ZnwmRKSt9nothrow_t, size_t size, std::nothrow_t const&) {
+-  OPERATOR_NEW_BODY(FROM_NEW, true /*nothrow*/);
++  OPERATOR_NEW_BODY(FROM_NEW, true );
+ }
+ INTERCEPTOR(void *, _ZnamRKSt9nothrow_t, size_t size, std::nothrow_t const&) {
+-  OPERATOR_NEW_BODY(FROM_NEW_BR, true /*nothrow*/);
++  OPERATOR_NEW_BODY(FROM_NEW_BR, true );
+ }
+ #endif  // !SANITIZER_MAC
+ 
++
+ #define OPERATOR_DELETE_BODY(type) \
+   if (IS_FROM_LOCAL_POOL(ptr)) return;\
+   GET_STACK_TRACE_FREE;\
+@@ -155,6 +161,7 @@ INTERCEPTOR(void *, _ZnamRKSt9nothrow_t, size_t size, std::nothrow_t const&) {
+   asan_delete(ptr, size, static_cast<uptr>(align), &stack, type);
+ 
+ #if !SANITIZER_MAC
++/*
+ CXX_OPERATOR_ATTRIBUTE
+ void operator delete(void *ptr) NOEXCEPT
+ { OPERATOR_DELETE_BODY(FROM_NEW); }
+@@ -191,7 +198,7 @@ void operator delete(void *ptr, size_t size, std::align_val_t align) NOEXCEPT
+ CXX_OPERATOR_ATTRIBUTE
+ void operator delete[](void *ptr, size_t size, std::align_val_t align) NOEXCEPT
+ { OPERATOR_DELETE_BODY_SIZE_ALIGN(FROM_NEW_BR); }
+-
++*/
+ #else  // SANITIZER_MAC
+ INTERCEPTOR(void, _ZdlPv, void *ptr)
+ { OPERATOR_DELETE_BODY(FROM_NEW); }
+diff --git a/compiler-rt/lib/asan/asan_poisoning.cpp b/compiler-rt/lib/asan/asan_poisoning.cpp
+index f3fbe684e2cb..6895f6fd6f07 100644
+--- a/compiler-rt/lib/asan/asan_poisoning.cpp
++++ b/compiler-rt/lib/asan/asan_poisoning.cpp
+@@ -36,7 +36,7 @@ void PoisonShadow(uptr addr, uptr size, u8 value) {
+   CHECK(AddrIsInMem(addr));
+   CHECK(AddrIsAlignedByGranularity(addr + size));
+   CHECK(AddrIsInMem(addr + size - SHADOW_GRANULARITY));
+-  CHECK(REAL(memset));
++  //CHECK(REAL(memset));
+   FastPoisonShadow(addr, size, value);
+ }
+ 
+@@ -137,7 +137,7 @@ void __asan_poison_memory_region(void const volatile *addr, uptr size) {
+     }
+     beg.chunk++;
+   }
+-  REAL(memset)(beg.chunk, kAsanUserPoisonedMemoryMagic, end.chunk - beg.chunk);
++  memset(beg.chunk, kAsanUserPoisonedMemoryMagic, end.chunk - beg.chunk);
+   // Poison if byte in end.offset is unaddressable.
+   if (end.value > 0 && end.value <= end.offset) {
+     *end.chunk = kAsanUserPoisonedMemoryMagic;
+@@ -168,7 +168,7 @@ void __asan_unpoison_memory_region(void const volatile *addr, uptr size) {
+     *beg.chunk = 0;
+     beg.chunk++;
+   }
+-  REAL(memset)(beg.chunk, 0, end.chunk - beg.chunk);
++  memset(beg.chunk, 0, end.chunk - beg.chunk);
+   if (end.offset > 0 && end.value != 0) {
+     *end.chunk = Max(end.value, end.offset);
+   }
+@@ -318,27 +318,27 @@ static void PoisonAlignedStackMemory(uptr addr, uptr size, bool do_poison) {
+ }
+ 
+ void __asan_set_shadow_00(uptr addr, uptr size) {
+-  REAL(memset)((void *)addr, 0, size);
++  memset((void *)addr, 0, size);
+ }
+ 
+ void __asan_set_shadow_f1(uptr addr, uptr size) {
+-  REAL(memset)((void *)addr, 0xf1, size);
++  memset((void *)addr, 0xf1, size);
+ }
+ 
+ void __asan_set_shadow_f2(uptr addr, uptr size) {
+-  REAL(memset)((void *)addr, 0xf2, size);
++  memset((void *)addr, 0xf2, size);
+ }
+ 
+ void __asan_set_shadow_f3(uptr addr, uptr size) {
+-  REAL(memset)((void *)addr, 0xf3, size);
++  memset((void *)addr, 0xf3, size);
+ }
+ 
+ void __asan_set_shadow_f5(uptr addr, uptr size) {
+-  REAL(memset)((void *)addr, 0xf5, size);
++  memset((void *)addr, 0xf5, size);
+ }
+ 
+ void __asan_set_shadow_f8(uptr addr, uptr size) {
+-  REAL(memset)((void *)addr, 0xf8, size);
++  memset((void *)addr, 0xf8, size);
+ }
+ 
+ void __asan_poison_stack_memory(uptr addr, uptr size) {
+diff --git a/compiler-rt/lib/asan/asan_poisoning.h b/compiler-rt/lib/asan/asan_poisoning.h
+index 62dd9bd0edd3..3cf7cad41b8b 100644
+--- a/compiler-rt/lib/asan/asan_poisoning.h
++++ b/compiler-rt/lib/asan/asan_poisoning.h
+@@ -55,20 +55,20 @@ ALWAYS_INLINE void FastPoisonShadow(uptr aligned_beg, uptr aligned_size,
+       // them, so default to memset.
+       SANITIZER_RTEMS == 1 ||
+       shadow_end - shadow_beg < common_flags()->clear_shadow_mmap_threshold) {
+-    REAL(memset)((void*)shadow_beg, value, shadow_end - shadow_beg);
++    memset((void*)shadow_beg, value, shadow_end - shadow_beg);
+   } else {
+     uptr page_size = GetPageSizeCached();
+     uptr page_beg = RoundUpTo(shadow_beg, page_size);
+     uptr page_end = RoundDownTo(shadow_end, page_size);
+ 
+     if (page_beg >= page_end) {
+-      REAL(memset)((void *)shadow_beg, 0, shadow_end - shadow_beg);
++      memset((void *)shadow_beg, 0, shadow_end - shadow_beg);
+     } else {
+       if (page_beg != shadow_beg) {
+-        REAL(memset)((void *)shadow_beg, 0, page_beg - shadow_beg);
++        memset((void *)shadow_beg, 0, page_beg - shadow_beg);
+       }
+       if (page_end != shadow_end) {
+-        REAL(memset)((void *)page_end, 0, shadow_end - page_end);
++        memset((void *)page_end, 0, shadow_end - page_end);
+       }
+       ReserveShadowMemoryRange(page_beg, page_end - 1, nullptr);
+     }
+diff --git a/compiler-rt/lib/asan/asan_posix.cpp b/compiler-rt/lib/asan/asan_posix.cpp
+index 920d216624a3..6ab7fd5e470c 100644
+--- a/compiler-rt/lib/asan/asan_posix.cpp
++++ b/compiler-rt/lib/asan/asan_posix.cpp
+@@ -93,12 +93,12 @@ void AsanTSDInit(void (*destructor)(void *tsd)) {
+ }
+ 
+ void *AsanTSDGet() {
+-  CHECK(tsd_key_inited);
++  //CHECK(tsd_key_inited);
+   return pthread_getspecific(tsd_key);
+ }
+ 
+ void AsanTSDSet(void *tsd) {
+-  CHECK(tsd_key_inited);
++//  CHECK(tsd_key_inited);
+   pthread_setspecific(tsd_key, tsd);
+ }
+ 
+diff --git a/compiler-rt/lib/asan/asan_rtl.cpp b/compiler-rt/lib/asan/asan_rtl.cpp
+index 594d7752eea6..8be34c4de3af 100644
+--- a/compiler-rt/lib/asan/asan_rtl.cpp
++++ b/compiler-rt/lib/asan/asan_rtl.cpp
+@@ -456,7 +456,7 @@ static void AsanInitInternal() {
+   // AsanInitInternal -> android_log_write -> __interceptor_strcmp
+   AndroidLogInit();
+ 
+-  ReplaceSystemMalloc();
++  //ReplaceSystemMalloc();
+ 
+   DisableCoreDumperIfNecessary();
+ 
+diff --git a/compiler-rt/lib/asan/asan_stats.cpp b/compiler-rt/lib/asan/asan_stats.cpp
+index 00ded8f5ef50..803f1f89d3c9 100644
+--- a/compiler-rt/lib/asan/asan_stats.cpp
++++ b/compiler-rt/lib/asan/asan_stats.cpp
+@@ -25,8 +25,8 @@ AsanStats::AsanStats() {
+ }
+ 
+ void AsanStats::Clear() {
+-  CHECK(REAL(memset));
+-  REAL(memset)(this, 0, sizeof(AsanStats));
++  //CHECK(REAL(memset));
++  memset(this, 0, sizeof(AsanStats));
+ }
+ 
+ static void PrintMallocStatsArray(const char *prefix,
+diff --git a/compiler-rt/lib/sanitizer_common/sanitizer_common_interceptors.inc b/compiler-rt/lib/sanitizer_common/sanitizer_common_interceptors.inc
+index 2a4ab7e67a5c..eb30c44610de 100644
+--- a/compiler-rt/lib/sanitizer_common/sanitizer_common_interceptors.inc
++++ b/compiler-rt/lib/sanitizer_common/sanitizer_common_interceptors.inc
+@@ -360,6 +360,7 @@ UNUSED static void DeleteInterceptorMetadata(void *addr) {
+ }
+ #endif  // SI_POSIX
+ 
++/*
+ #if SANITIZER_INTERCEPT_STRLEN
+ INTERCEPTOR(SIZE_T, strlen, const char *s) {
+   // Sometimes strlen is called prior to InitializeCommonInterceptors,
+@@ -394,6 +395,7 @@ INTERCEPTOR(SIZE_T, strnlen, const char *s, SIZE_T maxlen) {
+ #define INIT_STRNLEN
+ #endif
+ 
++
+ #if SANITIZER_INTERCEPT_STRNDUP
+ INTERCEPTOR(char*, strndup, const char *s, uptr size) {
+   void *ctx;
+@@ -430,6 +432,7 @@ INTERCEPTOR(char*, textdomain, const char *domainname) {
+ #define INIT_TEXTDOMAIN
+ #endif
+ 
++
+ #if SANITIZER_INTERCEPT_STRCMP
+ static inline int CharCmpX(unsigned char c1, unsigned char c2) {
+   return (c1 == c2) ? 0 : (c1 < c2) ? -1 : 1;
+@@ -3598,6 +3601,7 @@ INTERCEPTOR(int, tcgetattr, int fd, void *termios_p) {
+ #define INIT_TCGETATTR
+ #endif
+ 
++
+ #if SANITIZER_INTERCEPT_REALPATH
+ INTERCEPTOR(char *, realpath, const char *path, char *resolved_path) {
+   void *ctx;
+@@ -9733,30 +9737,35 @@ INTERCEPTOR(void, qsort_r, void *base, SIZE_T nmemb, SIZE_T size,
+ 
+ #include "sanitizer_common_interceptors_netbsd_compat.inc"
+ 
++End comment to disable all common interceptors
++*/
++
+ static void InitializeCommonInterceptors() {
+ #if SI_POSIX
+   static u64 metadata_mem[sizeof(MetadataHashMap) / sizeof(u64) + 1];
+   interceptor_metadata_map = new ((void *)&metadata_mem) MetadataHashMap();
+ #endif
+ 
++
++/*
+   INIT_MMAP;
+   INIT_MMAP64;
+-  INIT_TEXTDOMAIN;
++  //INIT_TEXTDOMAIN;
+   INIT_STRLEN;
+   INIT_STRNLEN;
+-  INIT_STRNDUP;
+-  INIT___STRNDUP;
+-  INIT_STRCMP;
++ // INIT_STRNDUP;
++ // INIT___STRNDUP;
++ // INIT_STRCMP;
+   INIT_STRNCMP;
+-  INIT_STRCASECMP;
+-  INIT_STRNCASECMP;
+-  INIT_STRSTR;
+-  INIT_STRCASESTR;
++  //INIT_STRCASECMP;
++  //INIT_STRNCASECMP;
++  //INIT_STRSTR;
++  //INIT_STRCASESTR;
+   INIT_STRCHR;
+   INIT_STRCHRNUL;
+   INIT_STRRCHR;
+   INIT_STRSPN;
+-  INIT_STRTOK;
++//  INIT_STRTOK;
+   INIT_STRPBRK;
+   INIT_STRXFRM;
+   INIT___STRXFRM_L;
+@@ -9848,7 +9857,7 @@ static void InitializeCommonInterceptors() {
+   INIT_WCRTOMB;
+   INIT_WCTOMB;
+   INIT_TCGETATTR;
+-  INIT_REALPATH;
++  //INIT_REALPATH;
+   INIT_CANONICALIZE_FILE_NAME;
+   INIT_CONFSTR;
+   INIT_SCHED_GETAFFINITY;
+@@ -10038,4 +10047,5 @@ static void InitializeCommonInterceptors() {
+   INIT_QSORT_R;
+ 
+   INIT___PRINTF_CHK;
++  */
+ }
+diff --git a/compiler-rt/lib/sanitizer_common/sanitizer_platform_limits_posix.cpp b/compiler-rt/lib/sanitizer_common/sanitizer_platform_limits_posix.cpp
+index aa845df4dde4..bb7df74350b0 100644
+--- a/compiler-rt/lib/sanitizer_common/sanitizer_platform_limits_posix.cpp
++++ b/compiler-rt/lib/sanitizer_common/sanitizer_platform_limits_posix.cpp
+@@ -117,7 +117,7 @@ typedef struct user_fpregs elf_fpregset_t;
+ #include <netax25/ax25.h>
+ #include <netipx/ipx.h>
+ #include <netrom/netrom.h>
+-#if HAVE_RPC_XDR_H
++#if HAVE_RPC_XDR_H_A
+ # include <rpc/xdr.h>
+ #endif
+ #include <scsi/scsi.h>
+@@ -1214,7 +1214,7 @@ CHECK_SIZE_AND_OFFSET(group, gr_passwd);
+ CHECK_SIZE_AND_OFFSET(group, gr_gid);
+ CHECK_SIZE_AND_OFFSET(group, gr_mem);
+ 
+-#if HAVE_RPC_XDR_H
++#if HAVE_RPC_XDR_H_A
+ CHECK_TYPE_SIZE(XDR);
+ CHECK_SIZE_AND_OFFSET(XDR, x_op);
+ CHECK_SIZE_AND_OFFSET(XDR, x_ops);
+diff --git a/llvm/lib/Transforms/Instrumentation/AddressSanitizer.cpp b/llvm/lib/Transforms/Instrumentation/AddressSanitizer.cpp
+index 79c119489a65..45e87f8a1a63 100644
+--- a/llvm/lib/Transforms/Instrumentation/AddressSanitizer.cpp
++++ b/llvm/lib/Transforms/Instrumentation/AddressSanitizer.cpp
+@@ -93,8 +93,7 @@ using namespace llvm;
+ static const uint64_t kDefaultShadowScale = 3;
+ static const uint64_t kDefaultShadowOffset32 = 1ULL << 29;
+ static const uint64_t kDefaultShadowOffset64 = 1ULL << 44;
+-static const uint64_t kDynamicShadowSentinel =
+-    std::numeric_limits<uint64_t>::max();
++static const uint64_t kDynamicShadowSentinel =std::numeric_limits<uint64_t>::max();
+ static const uint64_t kSmallX86_64ShadowOffsetBase = 0x7FFFFFFF;  // < 2G.
+ static const uint64_t kSmallX86_64ShadowOffsetAlignMask = ~0xFFFULL;
+ static const uint64_t kLinuxKasan_ShadowOffset64 = 0xdffffc0000000000;
+@@ -247,6 +246,7 @@ static cl::opt<int> ClMaxInsnsToInstrumentPerBB(
+ // This flag may need to be replaced with -f[no]asan-stack.
+ static cl::opt<bool> ClStack("asan-stack", cl::desc("Handle stack memory"),
+                              cl::Hidden, cl::init(true));
++
+ static cl::opt<uint32_t> ClMaxInlinePoisoningSize(
+     "asan-max-inline-poisoning-size",
+     cl::desc(
+@@ -255,7 +255,7 @@ static cl::opt<uint32_t> ClMaxInlinePoisoningSize(
+ 
+ static cl::opt<bool> ClUseAfterReturn("asan-use-after-return",
+                                       cl::desc("Check stack-use-after-return"),
+-                                      cl::Hidden, cl::init(true));
++                                      cl::Hidden, cl::init(false));
+ 
+ static cl::opt<bool> ClRedzoneByvalArgs("asan-redzone-byval-args",
+                                         cl::desc("Create redzones for byval "
+@@ -319,6 +319,16 @@ static cl::opt<bool> ClSkipPromotableAllocas(
+     cl::desc("Do not instrument promotable allocas"), cl::Hidden,
+     cl::init(true));
+ 
++// OptiSan - Precise stack metadata
++// TODO - Maybe use the same option for checks ?
++static cl::opt<bool> ClPreciseStackMetadata(
++    "asan-precise-stack",
++    cl::desc("Only instrument specified allocas"), cl::Hidden,
++    cl::init(false));
++//TODO - Move this somwehre else (optisan)
++//#define ASAN_STACK_OBJECT "asanStackObj"
++
++
+ // These flags allow to change the shadow mapping.
+ // The shadow mapping looks like
+ //    Shadow = (Mem >> scale) + offset
+@@ -1032,10 +1042,17 @@ struct FunctionStackPoisoner : public InstVisitor<FunctionStackPoisoner> {
+     }
+ 
+     StackAlignment = std::max(StackAlignment, AI.getAlignment());
+-    if (!AI.isStaticAlloca())
+-      DynamicAllocaVec.push_back(&AI);
+-    else
+-      AllocaVec.push_back(&AI);
++
++    if(ClPreciseStackMetadata && (!AI.hasMetadata("asanStackObj")))
++    {
++        return;
++    }
++
++        if (!AI.isStaticAlloca())
++            DynamicAllocaVec.push_back(&AI);
++        else
++            AllocaVec.push_back(&AI);
++
+   }
+ 
+   /// Collect lifetime intrinsic calls to check for use-after-scope
+@@ -2717,8 +2734,8 @@ bool AddressSanitizer::instrumentFunction(Function &F,
+       if (isInterestingMemoryAccess(Inst, &IsWrite, &TypeSize, &Alignment))
+         instrumentMop(ObjSizeVis, Inst, UseCalls,
+                       F.getParent()->getDataLayout());
+-      else
+-        instrumentMemIntrinsic(cast<MemIntrinsic>(Inst));
++      //else
++      //  instrumentMemIntrinsic(cast<MemIntrinsic>(Inst));
+     }
+     NumInstrumented++;
+   }
+@@ -3331,3 +3348,4 @@ bool AddressSanitizer::isSafeAccess(ObjectSizeOffsetVisitor &ObjSizeVis,
+   return Offset >= 0 && Size >= uint64_t(Offset) &&
+          Size - uint64_t(Offset) >= TypeSize / 8;
+ }
++

@@ -1,0 +1,3997 @@
+diff --git a/lib/DDA/ContextDDA.cpp b/lib/DDA/ContextDDA.cpp
+index 3faba073..6b37821a 100644
+--- a/lib/DDA/ContextDDA.cpp
++++ b/lib/DDA/ContextDDA.cpp
+@@ -5,7 +5,6 @@
+  *      Author: Yulei Sui
+  */
+ 
+-#include "Util/Options.h"
+ #include "DDA/ContextDDA.h"
+ #include "DDA/FlowDDA.h"
+ #include "DDA/DDAClient.h"
+@@ -13,6 +12,8 @@
+ using namespace SVF;
+ using namespace SVFUtil;
+ 
++static llvm::cl::opt<unsigned long long> cxtBudget("cxtbg",  llvm::cl::init(10000),
++        llvm::cl::desc("Maximum step budget of context-sensitive traversing"));
+ /*!
+  * Constructor
+  */
+@@ -53,7 +54,7 @@ const CxtPtSet& ContextDDA::computeDDAPts(const CxtVar& var)
+ {
+ 
+     resetQuery();
+-    LocDPItem::setMaxBudget(Options::CxtBudget);
++    LocDPItem::setMaxBudget(cxtBudget);
+ 
+     NodeID id = var.get_id();
+     PAGNode* node = getPAG()->getPAGNode(id);
+diff --git a/lib/DDA/DDAClient.cpp b/lib/DDA/DDAClient.cpp
+index 110d9d47..a0178db2 100644
+--- a/lib/DDA/DDAClient.cpp
++++ b/lib/DDA/DDAClient.cpp
+@@ -8,7 +8,6 @@
+  */
+ 
+ 
+-#include "Util/Options.h"
+ #include "Util/SVFUtil.h"
+ #include "SVF-FE/CPPUtil.h"
+ 
+@@ -20,6 +19,32 @@
+ using namespace SVF;
+ using namespace SVFUtil;
+ 
++static llvm::cl::opt<bool> SingleLoad("single-load", llvm::cl::init(true),
++                                      llvm::cl::desc("Count load pointer with same source operand as one query"));
++
++static llvm::cl::opt<bool> DumpFree("dump-free", llvm::cl::init(false),
++                                    llvm::cl::desc("Dump use after free locations"));
++
++static llvm::cl::opt<bool> DumpUninitVar("dump-uninit-var", llvm::cl::init(false),
++        llvm::cl::desc("Dump uninitialised variables"));
++
++static llvm::cl::opt<bool> DumpUninitPtr("dump-uninit-ptr", llvm::cl::init(false),
++        llvm::cl::desc("Dump uninitialised pointers"));
++
++static llvm::cl::opt<bool> DumpSUPts("dump-su-pts", llvm::cl::init(false),
++                                     llvm::cl::desc("Dump strong updates store"));
++
++static llvm::cl::opt<bool> DumpSUStore("dump-su-store", llvm::cl::init(false),
++                                       llvm::cl::desc("Dump strong updates store"));
++
++static llvm::cl::opt<bool> MallocOnly("malloc-only", llvm::cl::init(true),
++                                      llvm::cl::desc("Only add tainted objects for malloc"));
++
++static llvm::cl::opt<bool> TaintUninitHeap("uninit-heap", llvm::cl::init(true),
++        llvm::cl::desc("detect uninitialized heap variables"));
++
++static llvm::cl::opt<bool> TaintUninitStack("uninit-stack", llvm::cl::init(true),
++        llvm::cl::desc("detect uninitialized stack variables"));
+ 
+ void DDAClient::answerQueries(PointerAnalysis* pta)
+ {
+diff --git a/lib/DDA/DDAPass.cpp b/lib/DDA/DDAPass.cpp
+index c0e2e83a..d3fd22fd 100644
+--- a/lib/DDA/DDAPass.cpp
++++ b/lib/DDA/DDAPass.cpp
+@@ -5,7 +5,6 @@
+  */
+ 
+ 
+-#include "Util/Options.h"
+ #include "MemoryModel/PointerAnalysisImpl.h"
+ #include "DDA/DDAPass.h"
+ #include "DDA/FlowDDA.h"
+@@ -21,8 +20,43 @@ using namespace SVFUtil;
+ 
+ char DDAPass::ID = 0;
+ 
++static llvm::cl::opt<unsigned> maxPathLen("maxpath",  llvm::cl::init(100000),
++        llvm::cl::desc("Maximum path limit for DDA"));
++
++static llvm::cl::opt<unsigned> maxContextLen("maxcxt",  llvm::cl::init(3),
++        llvm::cl::desc("Maximum context limit for DDA"));
++
++static llvm::cl::opt<string> userInputQuery("query",  llvm::cl::init("all"),
++        llvm::cl::desc("Please specify queries by inputing their pointer ids"));
++
++static llvm::cl::opt<bool> insenRecur("inrecur", llvm::cl::init(false),
++                                      llvm::cl::desc("Mark context insensitive SVFG edges due to function recursions"));
++
++static llvm::cl::opt<bool> insenCycle("incycle", llvm::cl::init(false),
++                                      llvm::cl::desc("Mark context insensitive SVFG edges due to value-flow cycles"));
++
++static llvm::cl::opt<bool> printCPts("cpts", llvm::cl::init(false),
++                                     llvm::cl::desc("Dump conditional points-to set "));
++
++static llvm::cl::opt<bool> printQueryPts("print-query-pts", llvm::cl::init(false),
++        llvm::cl::desc("Dump queries' conditional points-to set "));
++
++static llvm::cl::opt<bool> WPANUM("wpanum", llvm::cl::init(false),
++                                  llvm::cl::desc("collect WPA FS number only "));
++
+ static llvm::RegisterPass<DDAPass> DDAPA("dda", "Demand-driven Pointer Analysis Pass");
+ 
++/// register this into alias analysis group
++//static RegisterAnalysisGroup<AliasAnalysis> AA_GROUP(DDAPA);
++
++static llvm::cl::bits<PointerAnalysis::PTATY> DDASelected(llvm::cl::desc("Select pointer analysis"),
++        llvm::cl::values(
++            clEnumValN(PointerAnalysis::FlowS_DDA, "dfs", "Demand-driven flow sensitive analysis"),
++            clEnumValN(PointerAnalysis::Cxt_DDA, "cxt", "Demand-driven context- flow- sensitive analysis")
++        ));
++
++
++
+ DDAPass::~DDAPass()
+ {
+     // _pta->dumpStat();
+@@ -41,7 +75,7 @@ void DDAPass::runOnModule(SVFModule* module)
+     for (u32_t i = PointerAnalysis::FlowS_DDA;
+             i < PointerAnalysis::Default_PTA; i++)
+     {
+-        if (Options::DDASelected.isSet(i))
++        if (DDASelected.isSet(i))
+             runPointerAnalysis(module, i);
+     }
+ }
+@@ -57,14 +91,14 @@ bool DDAPass::runOnModule(Module& module)
+ void DDAPass::selectClient(SVFModule* module)
+ {
+ 
+-    if (!Options::UserInputQuery.empty())
++    if (!userInputQuery.empty())
+     {
+         /// solve function pointer
+-        if (Options::UserInputQuery == "funptr")
++        if (userInputQuery == "funptr")
+         {
+             _client = new FunptrDDAClient(module);
+         }
+-        else if (Options::UserInputQuery == "alias")
++        else if (userInputQuery == "alias")
+         {
+             _client = new AliasDDAClient(module);
+         }
+@@ -72,10 +106,10 @@ void DDAPass::selectClient(SVFModule* module)
+         else
+         {
+             _client = new DDAClient(module);
+-            if (Options::UserInputQuery != "all")
++            if (userInputQuery != "all")
+             {
+                 u32_t buf; // Have a buffer
+-                stringstream ss(Options::UserInputQuery); // Insert the user input string into a stream
++                stringstream ss(userInputQuery); // Insert the user input string into a stream
+                 while (ss >> buf)
+                     _client->setQuery(buf);
+             }
+@@ -96,8 +130,8 @@ void DDAPass::runPointerAnalysis(SVFModule* module, u32_t kind)
+ 	PAGBuilder builder;
+ 	PAG* pag = builder.build(module);
+ 
+-    VFPathCond::setMaxPathLen(Options::MaxPathLen);
+-    ContextCond::setMaxCxtLen(Options::MaxContextLen);
++    VFPathCond::setMaxPathLen(maxPathLen);
++    ContextCond::setMaxCxtLen(maxContextLen);
+ 
+     /// Initialize pointer analysis.
+     switch (kind)
+@@ -117,7 +151,7 @@ void DDAPass::runPointerAnalysis(SVFModule* module, u32_t kind)
+         break;
+     }
+ 
+-    if(Options::WPANum)
++    if(WPANUM)
+     {
+         _client->collectWPANum(module);
+     }
+@@ -129,13 +163,13 @@ void DDAPass::runPointerAnalysis(SVFModule* module, u32_t kind)
+         _client->answerQueries(_pta);
+         ///finalize
+         _pta->finalize();
+-        if(Options::PrintCPts)
++        if(printCPts)
+             _pta->dumpCPts();
+ 
+         if (_pta->printStat())
+             _client->performStat(_pta);
+ 
+-        if (Options::PrintQueryPts)
++        if (printQueryPts)
+             printQueryPTS();
+     }
+ }
+@@ -146,9 +180,9 @@ void DDAPass::runPointerAnalysis(SVFModule* module, u32_t kind)
+  */
+ void DDAPass::initCxtInsensitiveEdges(PointerAnalysis* pta, const SVFG* svfg,const SVFGSCC* svfgSCC, SVFGEdgeSet& insensitveEdges)
+ {
+-    if(Options::InsenRecur)
++    if(insenRecur)
+         collectCxtInsenEdgeForRecur(pta,svfg,insensitveEdges);
+-    else if(Options::InsenCycle)
++    else if(insenCycle)
+         collectCxtInsenEdgeForVFCycle(pta,svfg,svfgSCC,insensitveEdges);
+ }
+ 
+diff --git a/lib/DDA/FlowDDA.cpp b/lib/DDA/FlowDDA.cpp
+index e81a1faf..2d5b2887 100644
+--- a/lib/DDA/FlowDDA.cpp
++++ b/lib/DDA/FlowDDA.cpp
+@@ -5,7 +5,6 @@
+  *      Author: Yulei Sui, Sen Ye
+  */
+ 
+-#include "Util/Options.h"
+ #include "DDA/FlowDDA.h"
+ #include "DDA/DDAClient.h"
+ 
+@@ -13,6 +12,8 @@ using namespace std;
+ using namespace SVF;
+ using namespace SVFUtil;
+ 
++static llvm::cl::opt<unsigned long long> flowBudget("flowbg",  llvm::cl::init(10000),
++        llvm::cl::desc("Maximum step budget of flow-sensitive traversing"));
+ 
+ /*!
+  * Compute points-to set for queries
+@@ -20,7 +21,7 @@ using namespace SVFUtil;
+ void FlowDDA::computeDDAPts(NodeID id)
+ {
+     resetQuery();
+-    LocDPItem::setMaxBudget(Options::FlowBudget);
++    LocDPItem::setMaxBudget(flowBudget);
+ 
+     PAGNode* node = getPAG()->getPAGNode(id);
+     LocDPItem dpm = getDPIm(node->getId(),getDefSVFGNode(node));
+diff --git a/lib/Graphs/ConsG.cpp b/lib/Graphs/ConsG.cpp
+index dbd66156..b1442994 100644
+--- a/lib/Graphs/ConsG.cpp
++++ b/lib/Graphs/ConsG.cpp
+@@ -28,7 +28,6 @@
+  */
+ 
+ #include "Graphs/ConsG.h"
+-#include "Util/Options.h"
+ 
+ using namespace SVF;
+ using namespace SVFUtil;
+@@ -586,13 +585,6 @@ void ConstraintGraph::print()
+ 
+ }
+ 
+-/*!
+- * View dot graph of Constraint graph from debugger.
+- */
+-void ConstraintGraph::view() {
+-    llvm::ViewGraph(this, "Constraint Graph");
+-}
+-
+ /*!
+  * GraphTraits specialization for constraint graph
+  */
+@@ -624,7 +616,7 @@ struct DOTGraphTraits<ConstraintGraph*> : public DOTGraphTraits<PAG*>
+     static std::string getNodeLabel(NodeType *n, ConstraintGraph*)
+     {
+         PAGNode* node = PAG::getPAG()->getPAGNode(n->getId());
+-        bool briefDisplay = Options::BriefConsCGDotGraph;
++        bool briefDisplay = true;
+         bool nameDisplay = true;
+         std::string str;
+         raw_string_ostream rawstr(str);
+@@ -645,9 +637,9 @@ struct DOTGraphTraits<ConstraintGraph*> : public DOTGraphTraits<PAG*>
+         {
+             // print the whole value
+             if (!SVFUtil::isa<DummyValPN>(node) && !SVFUtil::isa<DummyObjPN>(node))
+-                rawstr << node->getId() << ":" << value2String(node->getValue());
++                rawstr << *node->getValue();
+             else
+-                rawstr << node->getId() << ":";
++                rawstr << "";
+ 
+         }
+ 
+@@ -657,7 +649,40 @@ struct DOTGraphTraits<ConstraintGraph*> : public DOTGraphTraits<PAG*>
+     static std::string getNodeAttributes(NodeType *n, ConstraintGraph*)
+     {
+         PAGNode* node = PAG::getPAG()->getPAGNode(n->getId());
+-        return node->getNodeAttrForDotDisplay();
++
++        if (SVFUtil::isa<ValPN>(node))
++        {
++            if(SVFUtil::isa<GepValPN>(node))
++                return "shape=hexagon";
++            else if (SVFUtil::isa<DummyValPN>(node))
++                return "shape=diamond";
++            else
++                return "shape=circle";
++        }
++        else if (SVFUtil::isa<ObjPN>(node))
++        {
++            if(SVFUtil::isa<GepObjPN>(node))
++                return "shape=doubleoctagon";
++            else if(SVFUtil::isa<FIObjPN>(node))
++                return "shape=septagon";
++            else if (SVFUtil::isa<DummyObjPN>(node))
++                return "shape=Mcircle";
++            else
++                return "shape=doublecircle";
++        }
++        else if (SVFUtil::isa<RetPN>(node))
++        {
++            return "shape=Mrecord";
++        }
++        else if (SVFUtil::isa<VarArgPN>(node))
++        {
++            return "shape=octagon";
++        }
++        else
++        {
++            assert(0 && "no such kind node!!");
++        }
++        return "";
+     }
+ 
+     template<class EdgeIter>
+diff --git a/lib/Graphs/ICFG.cpp b/lib/Graphs/ICFG.cpp
+index 4ed8eb2f..b773bf71 100644
+--- a/lib/Graphs/ICFG.cpp
++++ b/lib/Graphs/ICFG.cpp
+@@ -27,7 +27,6 @@
+  *      Author: Yulei Sui
+  */
+ 
+-#include <Util/Options.h>
+ #include "SVF-FE/LLVMUtil.h"
+ #include "Util/SVFModule.h"
+ #include "Graphs/ICFG.h"
+@@ -65,9 +64,6 @@ const std::string ICFGNode::toString() const {
+     return rawstr.str();
+ }
+ 
+-void ICFGNode::dump() const {
+-    outs() << this->toString() << "\n";
+-}
+ 
+ const std::string GlobalBlockNode::toString() const {
+     std::string str;
+@@ -81,7 +77,7 @@ const std::string IntraBlockNode::toString() const {
+     std::string str;
+     raw_string_ostream rawstr(str);
+     rawstr << "IntraBlockNode ID: " << getId();
+-    rawstr << value2String(getInst()) << " {fun: " << getFun()->getName() << "}";
++    rawstr << " " << *getInst() << " {fun: " << getFun()->getName() << "}";
+     return rawstr.str();
+ }
+ 
+@@ -115,7 +111,7 @@ const std::string CallBlockNode::toString() const {
+     std::string str;
+     raw_string_ostream rawstr(str);
+     rawstr << "CallBlockNode ID: " << getId();
+-    rawstr << value2String(getCallSite()) << " {fun: " << getFun()->getName() << "}";
++    rawstr << " " << *getCallSite() << " {fun: " << getFun()->getName() << "}";
+     return rawstr.str();
+ }
+ 
+@@ -123,7 +119,7 @@ const std::string RetBlockNode::toString() const {
+     std::string str;
+     raw_string_ostream rawstr(str);
+     rawstr << "RetBlockNode ID: " << getId();
+-    rawstr << value2String(getCallSite()) << " {fun: " << getFun()->getName() << "}";
++    rawstr << " " << *getCallSite() << " {fun: " << getFun()->getName() << "}";
+     return rawstr.str();
+ }
+ 
+@@ -148,16 +144,16 @@ const std::string IntraCFGEdge::toString() const {
+ const std::string CallCFGEdge::toString() const {
+     std::string str;
+     raw_string_ostream rawstr(str);
+-    rawstr << "CallCFGEdge " << " [";
+-    rawstr << getDstID() << "<--" << getSrcID() << "]\t CallSite: " << *cs << "\t";
++    rawstr << "CallCFGEdge CallSite: " << *cs << " [";
++    rawstr << getDstID() << "<--" << getSrcID() << "]\t";
+     return rawstr.str();
+ }
+ 
+ const std::string RetCFGEdge::toString() const {
+     std::string str;
+     raw_string_ostream rawstr(str);
+-    rawstr << "RetCFGEdge " << " [";
+-    rawstr << getDstID() << "<--" << getSrcID() << "]\t CallSite: " << *cs << "\t";
++    rawstr << "RetCFGEdge CallSite: " << *cs << " [";
++    rawstr << getDstID() << "<--" << getSrcID() << "]\t";
+     return rawstr.str();
+ }
+ 
+@@ -400,14 +396,6 @@ void ICFG::dump(const std::string& file, bool simple)
+     GraphPrinter::WriteGraphToFile(outs(), file, this, simple);
+ }
+ 
+-/*!
+- * View ICFG
+- */
+-void ICFG::view()
+-{
+-    llvm::ViewGraph(this, "Interprocedural Control-Flow Graph");
+-}
+-
+ /*!
+  * Update ICFG for indirect calls
+  */
+@@ -425,10 +413,11 @@ void ICFG::updateCallGraph(PTACallGraph* callgraph)
+         {
+             const SVFFunction*  callee = *func_iter;
+             CallBlockNode* CallBlockNode = getCallBlockNode(cs);
++            FunEntryBlockNode* calleeEntryNode = getFunEntryICFGNode(callee);
++            addCallEdge(CallBlockNode, calleeEntryNode, cs);
++
+             if (!isExtCall(callee))
+             {
+-                FunEntryBlockNode* calleeEntryNode = getFunEntryICFGNode(callee);
+-                addCallEdge(CallBlockNode, calleeEntryNode, cs);
+                 RetBlockNode* retBlockNode = getRetBlockNode(cs);
+                 FunExitBlockNode* calleeExitNode = getFunExitICFGNode(callee);
+                 addRetEdge(calleeExitNode, retBlockNode, cs);
+@@ -471,18 +460,14 @@ struct DOTGraphTraits<ICFG*> : public DOTGraphTraits<PAG*>
+         rawstr << "NodeID: " << node->getId() << "\n";
+         if (IntraBlockNode* bNode = SVFUtil::dyn_cast<IntraBlockNode>(node))
+         {
+-            rawstr << "IntraBlockNode ID: " << bNode->getId() << " \t";
++            rawstr << bNode->toString();
++
+             PAG::PAGEdgeList&  edges = PAG::getPAG()->getInstPTAPAGEdgeList(bNode);
+-            if (edges.empty()) {
+-                rawstr << value2String(bNode->getInst()) << " \t";
+-            } else {
+-                for (PAG::PAGEdgeList::iterator it = edges.begin(), eit = edges.end(); it != eit; ++it)
+-                {
+-                    const PAGEdge* edge = *it;
+-                    rawstr << edge->toString();
+-                }
++            for (PAG::PAGEdgeList::iterator it = edges.begin(), eit = edges.end(); it != eit; ++it)
++            {
++                const PAGEdge* edge = *it;
++                rawstr << edge->toString();
+             }
+-            rawstr << " {fun: " << bNode->getFun()->getName() << "}";
+         }
+         else if (FunEntryBlockNode* entry = SVFUtil::dyn_cast<FunEntryBlockNode>(node))
+         {
+diff --git a/lib/Graphs/OfflineConsG.cpp b/lib/Graphs/OfflineConsG.cpp
+index 04609fa2..65410546 100644
+--- a/lib/Graphs/OfflineConsG.cpp
++++ b/lib/Graphs/OfflineConsG.cpp
+@@ -27,12 +27,14 @@
+  *      Author: Yuxiang Lei
+  */
+ 
+-#include "Util/Options.h"
+ #include "Graphs/OfflineConsG.h"
+ 
+ using namespace SVF;
+ using namespace SVFUtil;
+ 
++static llvm::cl::opt<bool> OCGDotGraph("dump-ocg", llvm::cl::init(false),
++                                       llvm::cl::desc("Dump dot graph of Offline Constraint Graph"));
++
+ /*!
+  * Builder of offline constraint graph
+  */
+@@ -168,7 +170,7 @@ NodeID OfflineConsG::solveRep(OSCC* oscc, NodeID rep)
+  */
+ void OfflineConsG::dump(std::string name)
+ {
+-    if (Options::OCGDotGraph)
++    if (OCGDotGraph)
+         GraphPrinter::WriteGraphToFile(outs(), name, this);
+ }
+ 
+@@ -243,11 +245,43 @@ struct DOTGraphTraits<OfflineConsG*> : public DOTGraphTraits<PAG*>
+         if (PAG::getPAG()->findPAGNode(n->getId()))
+         {
+             PAGNode *node = PAG::getPAG()->getPAGNode(n->getId());
+-            return node->getNodeAttrForDotDisplay();
++            if (SVFUtil::isa<ValPN>(node))
++            {
++                if (SVFUtil::isa<GepValPN>(node))
++                    return "shape=hexagon";
++                else if (SVFUtil::isa<DummyValPN>(node))
++                    return "shape=diamond";
++                else
++                    return "shape=circle";
++            }
++            else if (SVFUtil::isa<ObjPN>(node))
++            {
++                if (SVFUtil::isa<GepObjPN>(node))
++                    return "shape=doubleoctagon";
++                else if (SVFUtil::isa<FIObjPN>(node))
++                    return "shape=septagon";
++                else if (SVFUtil::isa<DummyObjPN>(node))
++                    return "shape=Mcircle";
++                else
++                    return "shape=doublecircle";
++            }
++            else if (SVFUtil::isa<RetPN>(node))
++            {
++                return "shape=Mrecord";
++            }
++            else if (SVFUtil::isa<VarArgPN>(node))
++            {
++                return "shape=octagon";
++            }
++            else
++            {
++                assert(0 && "no such kind node!!");
++            }
++            return "";
+         }
+         else
+         {
+-            return "shape=folder";
++            return "shape=doublecircle";
+         }
+     }
+ 
+diff --git a/lib/Graphs/PAG.cpp b/lib/Graphs/PAG.cpp
+index 7f39421f..0c708538 100644
+--- a/lib/Graphs/PAG.cpp
++++ b/lib/Graphs/PAG.cpp
+@@ -27,7 +27,6 @@
+  *      Author: Yulei Sui
+  */
+ 
+-#include "Util/Options.h"
+ #include "Graphs/PAG.h"
+ #include "SVF-FE/LLVMUtil.h"
+ #include "SVF-FE/ICFGBuilder.h"
+@@ -35,6 +34,12 @@
+ using namespace SVF;
+ using namespace SVFUtil;
+ 
++static llvm::cl::opt<bool> HANDBLACKHOLE("blk", llvm::cl::init(false),
++        llvm::cl::desc("Hanle blackhole edge"));
++
++static llvm::cl::opt<bool> FirstFieldEqBase("ff-eq-base", llvm::cl::init(true),
++        llvm::cl::desc("Treat base objects as their first fields"));
++
+ 
+ u64_t PAGEdge::callEdgeLabelCounter = 0;
+ u64_t PAGEdge::storeEdgeLabelCounter = 0;
+@@ -50,57 +55,14 @@ const std::string PAGNode::toString() const {
+     return rawstr.str();
+ }
+ 
+-/// Get shape and/or color of node for .dot display.
+-const std::string PAGNode::getNodeAttrForDotDisplay() const {
+-    // TODO: Maybe use over-rides instead of these ifs,
+-    // But this puts them conveniently together.
+-    if (SVFUtil::isa<ValPN>(this))
+-    {
+-        if(SVFUtil::isa<GepValPN>(this))
+-            return "shape=hexagon";
+-        else if (SVFUtil::isa<DummyValPN>(this))
+-            return "shape=diamond";
+-        else
+-            return "shape=box";
+-    }
+-    else if (SVFUtil::isa<ObjPN>(this))
+-    {
+-        if(SVFUtil::isa<GepObjPN>(this))
+-            return "shape=doubleoctagon";
+-        else if(SVFUtil::isa<FIObjPN>(this))
+-            return "shape=box3d";
+-        else if (SVFUtil::isa<DummyObjPN>(this))
+-            return "shape=tab";
+-        else
+-            return "shape=component";
+-    }
+-    else if (SVFUtil::isa<RetPN>(this))
+-    {
+-        return "shape=Mrecord";
+-    }
+-    else if (SVFUtil::isa<VarArgPN>(this))
+-    {
+-        return "shape=octagon";
+-    }
+-    else
+-    {
+-        assert(0 && "no such kind!!");
+-    }
+-    return "";
+-}
+-
+-void PAGNode::dump() const {
+-    outs() << this->toString() << "\n";
+-}
+-
+ const std::string ValPN::toString() const {
+     std::string str;
+     raw_string_ostream rawstr(str);
+     rawstr << "ValPN ID: " << getId();
+-    if (Options::PAGDotGraphShorter) {
+-        rawstr << "\n";
++    if(value){
++        rawstr << " " << *value << " ";
++        rawstr << getSourceLoc(value);
+     }
+-    rawstr << value2String(value);
+     return rawstr.str();
+ }
+ 
+@@ -108,10 +70,10 @@ const std::string ObjPN::toString() const {
+     std::string str;
+     raw_string_ostream rawstr(str);
+     rawstr << "ObjPN ID: " << getId();
+-    if (Options::PAGDotGraphShorter) {
+-        rawstr << "\n";
++    if(value){
++        rawstr << " " << *value << " ";
++        rawstr << getSourceLoc(value);
+     }
+-    rawstr << value2String(value);
+     return rawstr.str();
+ }
+ 
+@@ -119,21 +81,22 @@ const std::string GepValPN::toString() const {
+     std::string str;
+     raw_string_ostream rawstr(str);
+     rawstr << "GepValPN ID: " << getId() << " with offset_" + llvm::utostr(getOffset());
+-    if (Options::PAGDotGraphShorter) {
+-        rawstr << "\n";
++    if(value){
++        rawstr << " " << *value << " ";
++        rawstr << getSourceLoc(value);
+     }
+-    rawstr << value2String(value);
+     return rawstr.str();
+ }
+ 
++
+ const std::string GepObjPN::toString() const {
+     std::string str;
+     raw_string_ostream rawstr(str);
+     rawstr << "GepObjPN ID: " << getId() << " with offset_" + llvm::itostr(ls.getOffset());
+-    if (Options::PAGDotGraphShorter) {
+-        rawstr << "\n";
++    if(value){
++        rawstr << " " << *value << " ";
++        rawstr << getSourceLoc(value);
+     }
+-    rawstr << value2String(value);
+     return rawstr.str();
+ }
+ 
+@@ -141,10 +104,13 @@ const std::string FIObjPN::toString() const {
+     std::string str;
+     raw_string_ostream rawstr(str);
+     rawstr << "FIObjPN ID: " << getId() << " (base object)";
+-    if (Options::PAGDotGraphShorter) {
+-        rawstr << "\n";
++    if(value){
++        if(const SVF::Function* fun = SVFUtil::dyn_cast<Function>(value))
++            rawstr << " " << fun->getName() << " ";
++        else
++            rawstr << " " << *value << " ";
++        rawstr << getSourceLoc(value);
+     }
+-    rawstr << value2String(value);
+     return rawstr.str();
+ }
+ 
+@@ -208,10 +174,8 @@ const std::string AddrPE::toString() const{
+     std::string str;
+     raw_string_ostream rawstr(str);
+     rawstr << "AddrPE: [" << getDstID() << "<--" << getSrcID() << "]\t";
+-    if (Options::PAGDotGraphShorter) {
+-        rawstr << "\n";
+-    }
+-    rawstr << value2String(getValue());
++    if(getValue())
++        rawstr << *getValue() << getSourceLoc(getValue());
+     return rawstr.str();
+ }
+ 
+@@ -219,10 +183,8 @@ const std::string CopyPE::toString() const{
+     std::string str;
+     raw_string_ostream rawstr(str);
+     rawstr << "CopyPE: [" << getDstID() << "<--" << getSrcID() << "]\t";
+-    if (Options::PAGDotGraphShorter) {
+-        rawstr << "\n";
+-    }
+-    rawstr << value2String(getValue());
++    if(getValue())
++        rawstr << *getValue() << getSourceLoc(getValue());
+     return rawstr.str();
+ }
+ 
+@@ -230,10 +192,8 @@ const std::string CmpPE::toString() const{
+     std::string str;
+     raw_string_ostream rawstr(str);
+     rawstr << "CmpPE: [" << getDstID() << "<--" << getSrcID() << "]\t";
+-    if (Options::PAGDotGraphShorter) {
+-        rawstr << "\n";
+-    }
+-    rawstr << value2String(getValue());
++    if(getValue())
++        rawstr << *getValue() << getSourceLoc(getValue());
+     return rawstr.str();
+ }
+ 
+@@ -241,10 +201,8 @@ const std::string BinaryOPPE::toString() const{
+     std::string str;
+     raw_string_ostream rawstr(str);
+     rawstr << "BinaryOPPE: [" << getDstID() << "<--" << getSrcID() << "]\t";
+-    if (Options::PAGDotGraphShorter) {
+-        rawstr << "\n";
+-    }
+-    rawstr << value2String(getValue());
++    if(getValue())
++        rawstr << *getValue() << getSourceLoc(getValue());
+     return rawstr.str();
+ }
+ 
+@@ -252,10 +210,8 @@ const std::string UnaryOPPE::toString() const{
+     std::string str;
+     raw_string_ostream rawstr(str);
+     rawstr << "UnaryOPPE: [" << getDstID() << "<--" << getSrcID() << "]\t";
+-    if (Options::PAGDotGraphShorter) {
+-        rawstr << "\n";
+-    }
+-    rawstr << value2String(getValue());
++    if(getValue())
++        rawstr << *getValue() << getSourceLoc(getValue());
+     return rawstr.str();
+ }
+ 
+@@ -263,10 +219,8 @@ const std::string LoadPE::toString() const{
+     std::string str;
+     raw_string_ostream rawstr(str);
+     rawstr << "LoadPE: [" << getDstID() << "<--" << getSrcID() << "]\t";
+-    if (Options::PAGDotGraphShorter) {
+-        rawstr << "\n";
+-    }
+-    rawstr << value2String(getValue());
++    if(getValue())
++        rawstr << *getValue() << getSourceLoc(getValue());
+     return rawstr.str();
+ }
+ 
+@@ -274,10 +228,8 @@ const std::string StorePE::toString() const{
+     std::string str;
+     raw_string_ostream rawstr(str);
+     rawstr << "StorePE: [" << getDstID() << "<--" << getSrcID() << "]\t";
+-    if (Options::PAGDotGraphShorter) {
+-        rawstr << "\n";
+-    }
+-    rawstr << value2String(getValue());
++    if(getValue())
++        rawstr << *getValue() << getSourceLoc(getValue());
+     return rawstr.str();
+ }
+ 
+@@ -285,21 +237,17 @@ const std::string GepPE::toString() const{
+     std::string str;
+     raw_string_ostream rawstr(str);
+     rawstr << "GepPE: [" << getDstID() << "<--" << getSrcID() << "]\t";
+-    if (Options::PAGDotGraphShorter) {
+-        rawstr << "\n";
+-    }
+-    rawstr << value2String(getValue());
++    if(getValue())
++        rawstr << *getValue() << getSourceLoc(getValue());
+     return rawstr.str();
+ }
+ 
+ const std::string NormalGepPE::toString() const{
+     std::string str;
+     raw_string_ostream rawstr(str);
+-    rawstr << "NormalGepPE: [" << getDstID() << "<--" << getSrcID() << "]\t";
+-    if (Options::PAGDotGraphShorter) {
+-        rawstr << "\n";
+-    }
+-    rawstr << value2String(getValue());
++    rawstr << "VariantGepPE: [" << getDstID() << "<--" << getSrcID() << "]\t";
++    if(getValue())
++        rawstr << *getValue() << getSourceLoc(getValue());
+     return rawstr.str();
+ }
+ 
+@@ -307,10 +255,8 @@ const std::string VariantGepPE::toString() const{
+     std::string str;
+     raw_string_ostream rawstr(str);
+     rawstr << "VariantGepPE: [" << getDstID() << "<--" << getSrcID() << "]\t";
+-    if (Options::PAGDotGraphShorter) {
+-        rawstr << "\n";
+-    }
+-    rawstr << value2String(getValue());
++    if(getValue())
++        rawstr << *getValue() << getSourceLoc(getValue());
+     return rawstr.str();
+ }
+ 
+@@ -318,10 +264,8 @@ const std::string CallPE::toString() const{
+     std::string str;
+     raw_string_ostream rawstr(str);
+     rawstr << "CallPE: [" << getDstID() << "<--" << getSrcID() << "]\t";
+-    if (Options::PAGDotGraphShorter) {
+-        rawstr << "\n";
+-    }
+-    rawstr << value2String(getValue());
++    if(getValue())
++        rawstr << *getValue() << getSourceLoc(getValue());
+     return rawstr.str();
+ }
+ 
+@@ -329,10 +273,8 @@ const std::string RetPE::toString() const{
+     std::string str;
+     raw_string_ostream rawstr(str);
+     rawstr << "RetPE: [" << getDstID() << "<--" << getSrcID() << "]\t";
+-    if (Options::PAGDotGraphShorter) {
+-        rawstr << "\n";
+-    }
+-    rawstr << value2String(getValue());
++    if(getValue())
++        rawstr << *getValue() << getSourceLoc(getValue());
+     return rawstr.str();
+ }
+ 
+@@ -340,10 +282,8 @@ const std::string TDForkPE::toString() const{
+     std::string str;
+     raw_string_ostream rawstr(str);
+     rawstr << "TDForkPE: [" << getDstID() << "<--" << getSrcID() << "]\t";
+-    if (Options::PAGDotGraphShorter) {
+-        rawstr << "\n";
+-    }
+-    rawstr << value2String(getValue());
++    if(getValue())
++        rawstr << *getValue() << getSourceLoc(getValue());
+     return rawstr.str();
+ }
+ 
+@@ -351,10 +291,8 @@ const std::string TDJoinPE::toString() const{
+     std::string str;
+     raw_string_ostream rawstr(str);
+     rawstr << "TDJoinPE: [" << getDstID() << "<--" << getSrcID() << "]\t";
+-    if (Options::PAGDotGraphShorter) {
+-        rawstr << "\n";
+-    }
+-    rawstr << value2String(getValue());
++    if(getValue())
++        rawstr << *getValue() << getSourceLoc(getValue());
+     return rawstr.str();
+ }
+ 
+@@ -527,7 +465,7 @@ RetPE* PAG::addRetPE(NodeID src, NodeID dst, const CallBlockNode* cs)
+  */
+ PAGEdge* PAG::addBlackHoleAddrPE(NodeID node)
+ {
+-    if(Options::HandBlackHole)
++    if(HANDBLACKHOLE)
+         return pag->addAddrPE(pag->getBlackHoleNode(), node);
+     else
+         return pag->addCopyPE(pag->getNullPtr(), node);
+@@ -672,15 +610,15 @@ NodeID PAG::getGepObjNode(const MemObj* obj, const LocationSet& ls)
+ {
+     NodeID base = getObjectNode(obj);
+ 
++    // Base and first field are the same memory location.
++    if (FirstFieldEqBase && ls.getOffset() == 0) return base;
++
+     /// if this obj is field-insensitive, just return the field-insensitive node.
+     if (obj->isFieldInsensitive())
+         return getFIObjNode(obj);
+ 
+     LocationSet newLS = SymbolTableInfo::SymbolInfo()->getModulusOffset(obj,ls);
+ 
+-    // Base and first field are the same memory location.
+-    if (Options::FirstFieldEqBase && newLS.getOffset() == 0) return base;
+-
+     NodeLocationSetMap::iterator iter = GepObjNodeMap.find(std::make_pair(base, newLS));
+     if (iter == GepObjNodeMap.end())
+         return addGepObjNode(obj, newLS);
+@@ -1083,20 +1021,13 @@ void PAG::dump(std::string name)
+     GraphPrinter::WriteGraphToFile(outs(), name, this);
+ }
+ 
+-/*!
+- * View PAG
+- */
+-void PAG::view()
+-{
+-    llvm::ViewGraph(this, "ProgramAssignmentGraph");
+-}
+ 
+ /*!
+  * Whether to handle blackhole edge
+  */
+ void PAG::handleBlackHole(bool b)
+ {
+-    Options::HandBlackHole = b;
++    HANDBLACKHOLE = b;
+ }
+ 
+ namespace llvm
+@@ -1145,7 +1076,39 @@ struct DOTGraphTraits<PAG*> : public DefaultDOTGraphTraits
+ 
+     static std::string getNodeAttributes(PAGNode *node, PAG*)
+     {
+-        return node->getNodeAttrForDotDisplay();
++        if (SVFUtil::isa<ValPN>(node))
++        {
++            if(SVFUtil::isa<GepValPN>(node))
++                return "shape=hexagon";
++            else if (SVFUtil::isa<DummyValPN>(node))
++                return "shape=diamond";
++            else
++                return "shape=circle";
++        }
++        else if (SVFUtil::isa<ObjPN>(node))
++        {
++            if(SVFUtil::isa<GepObjPN>(node))
++                return "shape=doubleoctagon";
++            else if(SVFUtil::isa<FIObjPN>(node))
++                return "shape=septagon";
++            else if (SVFUtil::isa<DummyObjPN>(node))
++                return "shape=Mcircle";
++            else
++                return "shape=doublecircle";
++        }
++        else if (SVFUtil::isa<RetPN>(node))
++        {
++            return "shape=Mrecord";
++        }
++        else if (SVFUtil::isa<VarArgPN>(node))
++        {
++            return "shape=octagon";
++        }
++        else
++        {
++            assert(0 && "no such kind node!!");
++        }
++        return "";
+     }
+ 
+     template<class EdgeIter>
+diff --git a/lib/Graphs/PTACallGraph.cpp b/lib/Graphs/PTACallGraph.cpp
+index bf405add..3298a970 100644
+--- a/lib/Graphs/PTACallGraph.cpp
++++ b/lib/Graphs/PTACallGraph.cpp
+@@ -316,10 +316,6 @@ void PTACallGraph::dump(const std::string& filename)
+       GraphPrinter::WriteGraphToFile(outs(), filename, this);
+ }
+ 
+-void PTACallGraph::view()
+-{
+-    llvm::ViewGraph(this, "Call Graph");
+-}
+ 
+ namespace llvm
+ {
+@@ -354,7 +350,7 @@ struct DOTGraphTraits<PTACallGraph*> : public DefaultDOTGraphTraits
+         const SVFFunction* fun = node->getFunction();
+         if (!SVFUtil::isExtCall(fun))
+         {
+-            return "shape=box";
++            return "shape=circle";
+         }
+         else
+             return "shape=Mrecord";
+diff --git a/lib/Graphs/SVFG.cpp b/lib/Graphs/SVFG.cpp
+index 5b77eac4..158a282d 100644
+--- a/lib/Graphs/SVFG.cpp
++++ b/lib/Graphs/SVFG.cpp
+@@ -191,8 +191,6 @@ void SVFG::destroy()
+  */
+ void SVFG::buildSVFG()
+ {
+-    DBOUT(DGENERAL, outs() << pasMsg("Build Sparse Value-Flow Graph \n"));
+-
+     stat->startClk();
+ 
+     DBOUT(DGENERAL, outs() << pasMsg("\tCreate SVFG Addr-taken Node\n"));
+diff --git a/lib/Graphs/SVFGOPT.cpp b/lib/Graphs/SVFGOPT.cpp
+index 88b6d663..1e08f1d1 100644
+--- a/lib/Graphs/SVFGOPT.cpp
++++ b/lib/Graphs/SVFGOPT.cpp
+@@ -32,13 +32,20 @@
+  *
+  */
+ 
+-#include "Util/Options.h"
+ #include "Graphs/SVFGOPT.h"
+ #include "Graphs/SVFGStat.h"
+ 
+ using namespace SVF;
+ using namespace SVFUtil;
+ 
++static llvm::cl::opt<bool> ContextInsensitive("ci-svfg", llvm::cl::init(false),
++        llvm::cl::desc("Reduce SVFG into a context-insensitive one"));
++
++static llvm::cl::opt<bool> KeepAOFI("keepAOFI", llvm::cl::init(false),
++                                    llvm::cl::desc("Keep formal-in and actual-out parameters"));
++
++static llvm::cl::opt<std::string> SelfCycle("keep-self-cycle", llvm::cl::value_desc("keep self cycle"),
++        llvm::cl::desc("How to handle self cycle edges: all, context, none"));
+ static std::string KeepAllSelfCycle = "all";
+ static std::string KeepContextSelfCycle = "context";
+ static std::string KeepNoneSelfCycle = "none";
+@@ -48,12 +55,12 @@ void SVFGOPT::buildSVFG()
+ {
+     SVFG::buildSVFG();
+ 
+-    if(Options::DumpVFG)
+-        dump("SVFG_before_opt");
++    if(getDumpVFG())
++    	dump("SVFG_before_opt");
+ 
+     DBOUT(DGENERAL, outs() << SVFUtil::pasMsg("\tSVFG Optimisation\n"));
+ 
+-    keepActualOutFormalIn = Options::KeepAOFI;
++    keepActualOutFormalIn = KeepAOFI;
+ 
+     stat->sfvgOptStart();
+     handleInterValueFlow();
+@@ -67,7 +74,7 @@ void SVFGOPT::buildSVFG()
+  */
+ SVFGEdge* SVFGOPT::addCallIndirectSVFGEdge(NodeID srcId, NodeID dstId, CallSiteID csid, const PointsTo& cpts)
+ {
+-    if (Options::ContextInsensitive)
++    if (ContextInsensitive)
+         return addIntraIndirectVFEdge(srcId, dstId, cpts);
+     else
+         return addCallIndirectVFEdge(srcId, dstId, cpts, csid);
+@@ -78,7 +85,7 @@ SVFGEdge* SVFGOPT::addCallIndirectSVFGEdge(NodeID srcId, NodeID dstId, CallSiteI
+  */
+ SVFGEdge* SVFGOPT::addRetIndirectSVFGEdge(NodeID srcId, NodeID dstId, CallSiteID csid, const PointsTo& cpts)
+ {
+-    if (Options::ContextInsensitive)
++    if (ContextInsensitive)
+         return addIntraIndirectVFEdge(srcId, dstId, cpts);
+     else
+         return addRetIndirectVFEdge(srcId, dstId, cpts, csid);
+@@ -373,7 +380,7 @@ bool SVFGOPT::canBeRemoved(const SVFGNode * node)
+  */
+ void SVFGOPT::parseSelfCycleHandleOption()
+ {
+-    std::string choice = (Options::SelfCycle.getValue().empty()) ? "" : Options::SelfCycle.getValue();
++    std::string choice = (SelfCycle.getValue().empty()) ? "" : SelfCycle.getValue();
+     if (choice.empty() || choice == KeepAllSelfCycle)
+         keepAllSelfCycle = true;
+     else if (choice == KeepContextSelfCycle)
+diff --git a/lib/Graphs/VFG.cpp b/lib/Graphs/VFG.cpp
+index 0914dc29..1ac72d8b 100644
+--- a/lib/Graphs/VFG.cpp
++++ b/lib/Graphs/VFG.cpp
+@@ -28,8 +28,6 @@
+  */
+ 
+ 
+-#include <Graphs/SVFGNode.h>
+-#include "Util/Options.h"
+ #include "Graphs/VFG.h"
+ #include "Util/SVFModule.h"
+ #include "SVF-FE/LLVMUtil.h"
+@@ -37,6 +35,9 @@
+ using namespace SVF;
+ using namespace SVFUtil;
+ 
++static llvm::cl::opt<bool> DumpVFG("dump-VFG", llvm::cl::init(false),
++                                   llvm::cl::desc("Dump dot graph of VFG"));
++
+ const std::string VFGNode::toString() const {
+     std::string str;
+     raw_string_ostream rawstr(str);
+@@ -87,7 +88,8 @@ const std::string CmpVFGNode::toString() const {
+         rawstr << it->second->getId() << ", ";
+     rawstr << ")]\n";
+     if(res->hasValue()){
+-        rawstr << " " << value2String(res->getValue());
++        rawstr << " " << *res->getValue();
++        rawstr << SVFUtil::getSourceLoc(res->getValue());
+     }
+     return rawstr.str();
+ }
+@@ -102,7 +104,8 @@ const std::string BinaryOPVFGNode::toString() const {
+         rawstr << it->second->getId() << ", ";
+     rawstr << ")]\t";
+     if(res->hasValue()){
+-        rawstr << " " << value2String(res->getValue());
++        rawstr << " " << *res->getValue() << " ";
++        rawstr << SVFUtil::getSourceLoc(res->getValue());
+     }
+     return rawstr.str();
+ }
+@@ -117,7 +120,8 @@ const std::string UnaryOPVFGNode::toString() const {
+         rawstr << it->second->getId() << ", ";
+     rawstr << ")]\t";
+     if(res->hasValue()){
+-        rawstr << " " << value2String(res->getValue());
++        rawstr << " " << *res->getValue() << " ";
++        rawstr << SVFUtil::getSourceLoc(res->getValue());
+     }
+     return rawstr.str();
+ }
+@@ -141,7 +145,8 @@ const std::string PHIVFGNode::toString() const {
+         rawstr << it->second->getId() << ", ";
+     rawstr << ")]\t";
+     if(res->hasValue()){
+-        rawstr << " " << value2String(res->getValue());
++        rawstr << " " << *res->getValue();
++        rawstr << SVFUtil::getSourceLoc(res->getValue());
+     }
+     return rawstr.str();
+ }
+@@ -157,7 +162,8 @@ const std::string IntraPHIVFGNode::toString() const {
+         rawstr << it->second->getId() << ", ";
+     rawstr << ")]\t";
+     if(res->hasValue()){
+-        rawstr << " " << value2String(res->getValue());
++        rawstr << " " << *res->getValue();
++        rawstr << SVFUtil::getSourceLoc(res->getValue());
+     }
+     return rawstr.str();
+ }
+@@ -224,9 +230,9 @@ const std::string InterPHIVFGNode::toString() const {
+     std::string str;
+     raw_string_ostream rawstr(str);
+     if(isFormalParmPHI())
+-        rawstr << "FormalParmPHI ID: " << getId() << " PAGNode ID: " << res->getId() << "\n" << value2String(res->getValue());
++        rawstr << "FormalParmPHI ID: " << getId() << " PAGNode ID: " << res->getId() << "\n" << *res->getValue();
+     else
+-        rawstr << "ActualRetPHI ID: " << getId() << " PAGNode ID: " << res->getId() << "\n" << value2String(res->getValue());
++        rawstr << "ActualRetPHI ID: " << getId() << " PAGNode ID: " << res->getId() << "\n" << *res->getValue();
+     return rawstr.str();
+ }
+ 
+@@ -296,7 +302,7 @@ PHIVFGNode::PHIVFGNode(NodeID id, const PAGNode* r,VFGNodeK k): VFGNode(id, k),
+  * 2) connect VFG edges
+  *    between two statements (PAGEdges)
+  */
+-VFG::VFG(PTACallGraph* cg, VFGK k): totalVFGNode(0), callgraph(cg), pag(PAG::getPAG()), kind(k)
++VFG::VFG(PTACallGraph* cg, VFGK k): totalVFGNode(0), callgraph(cg), pag(PAG::getPAG()), kind(k), dumpVFG(false)
+ {
+ 
+     DBOUT(DGENERAL, outs() << pasMsg("\tCreate VFG Top Level Node\n"));
+@@ -742,9 +748,23 @@ VFGEdge* VFG::hasInterVFGEdge(VFGNode* src, VFGNode* dst, VFGEdge::VFGEdgeK kind
+ /*!
+  * Return the corresponding VFGEdge
+  */
+-VFGEdge* VFG::getIntraVFGEdge(const VFGNode* src, const VFGNode* dst, VFGEdge::VFGEdgeK kind)
++VFGEdge* VFG::getVFGEdge(const VFGNode* src, const VFGNode* dst, VFGEdge::VFGEdgeK kind)
+ {
+-    return hasIntraVFGEdge(const_cast<VFGNode*>(src),const_cast<VFGNode*>(dst),kind);
++
++    VFGEdge * edge = nullptr;
++    Size_t counter = 0;
++    for (VFGEdge::VFGEdgeSetTy::iterator iter = src->OutEdgeBegin();
++            iter != src->OutEdgeEnd(); ++iter)
++    {
++        if ((*iter)->getDstID() == dst->getId() && (*iter)->getEdgeKind() == kind)
++        {
++            counter++;
++            edge = (*iter);
++        }
++    }
++    assert(counter <= 1 && "there's more than one edge between two VFG nodes");
++    return edge;
++
+ }
+ 
+ 
+@@ -756,14 +776,6 @@ void VFG::dump(const std::string& file, bool simple)
+     GraphPrinter::WriteGraphToFile(outs(), file, this, simple);
+ }
+ 
+-/*!
+- * View VFG from the debugger.
+- */
+-void VFG::view()
+-{
+-    llvm::ViewGraph(this, "Value Flow Graph");
+-}
+-
+ 
+ void VFG::updateCallGraph(PointerAnalysis* pta)
+ {
+@@ -1017,10 +1029,6 @@ struct DOTGraphTraits<VFG*> : public DOTGraphTraits<PAG*>
+         {
+             rawstr << fr->toString();
+         }
+-        else if (MRSVFGNode* mr = SVFUtil::dyn_cast<MRSVFGNode>(node))
+-        {
+-            rawstr << mr->toString();
+-        }
+         else
+             assert(false && "what else kinds of nodes do we have??");
+ 
+@@ -1101,10 +1109,6 @@ struct DOTGraphTraits<VFG*> : public DOTGraphTraits<PAG*>
+         {
+             rawstr <<  "color=yellow,style=double";
+         }
+-        else if (SVFUtil::isa<MRSVFGNode>(node))
+-        {
+-            rawstr <<  "color=orange,style=double";
+-        }
+         else
+             assert(false && "no such kind of node!!");
+ 
+@@ -1127,15 +1131,6 @@ struct DOTGraphTraits<VFG*> : public DOTGraphTraits<PAG*>
+             else
+                 return "style=solid";
+         }
+-        else if (SVFUtil::isa<IndirectSVFGEdge>(edge))
+-        {
+-            if (SVFUtil::isa<CallIndSVFGEdge>(edge))
+-                return "style=dashed,color=red";
+-            else if (SVFUtil::isa<RetIndSVFGEdge>(edge))
+-                return "style=dashed,color=blue";
+-            else
+-                return "style=dashed";
+-        }
+         else
+         {
+             assert(false && "what else edge we have?");
+diff --git a/lib/MSSA/MemRegion.cpp b/lib/MSSA/MemRegion.cpp
+index fb55fc98..32611dd3 100644
+--- a/lib/MSSA/MemRegion.cpp
++++ b/lib/MSSA/MemRegion.cpp
+@@ -27,7 +27,6 @@
+  *      Author: Yulei Sui
+  */
+ 
+-#include "Util/Options.h"
+ #include "Util/SVFModule.h"
+ #include "MSSA/MemRegion.h"
+ #include "MSSA/MSSAMuChi.h"
+@@ -39,6 +38,8 @@ using namespace SVFUtil;
+ Size_t MemRegion::totalMRNum = 0;
+ Size_t MRVer::totalVERNum = 0;
+ 
++static llvm::cl::opt<bool> IgnoreDeadFun("mssa-ignoreDeadFun", llvm::cl::init(false),
++        llvm::cl::desc("Don't construct memory SSA for deadfunction"));
+ 
+ /*!
+  * Clean up memory
+@@ -155,7 +156,7 @@ void MRGenerator::collectModRefForLoadStore()
+         const SVFFunction& fun = **fi;
+ 
+         /// if this function does not have any caller, then we do not care its MSSA
+-        if (Options::IgnoreDeadFun && isDeadFunction(fun.getLLVMFun()))
++        if (IgnoreDeadFun && isDeadFunction(fun.getLLVMFun()))
+             continue;
+ 
+         for (Function::const_iterator iter = fun.getLLVMFun()->begin(), eiter = fun.getLLVMFun()->end();
+diff --git a/lib/MSSA/MemSSA.cpp b/lib/MSSA/MemSSA.cpp
+index 66233060..bc3d3dc1 100644
+--- a/lib/MSSA/MemSSA.cpp
++++ b/lib/MSSA/MemSSA.cpp
+@@ -27,7 +27,6 @@
+  *      Author: Yulei Sui
+  */
+ 
+-#include "Util/Options.h"
+ #include "SVF-FE/LLVMUtil.h"
+ #include "MSSA/MemPartition.h"
+ #include "MSSA/MemSSA.h"
+@@ -36,6 +35,14 @@
+ using namespace SVF;
+ using namespace SVFUtil;
+ 
++
++static llvm::cl::opt<bool> DumpMSSA("dump-mssa", llvm::cl::init(false),
++                                    llvm::cl::desc("Dump memory SSA"));
++static llvm::cl::opt<string> MSSAFun("mssafun",  llvm::cl::init(""),
++                                     llvm::cl::desc("Please specify which function needs to be dumped"));
++
++static llvm::cl::opt<std::string> MemPar("mempar", llvm::cl::value_desc("memory-partition-type"),
++        llvm::cl::desc("memory partition strategy"));
+ static std::string kDistinctMemPar = "distinct";
+ static std::string kIntraDisjointMemPar = "intra-disjoint";
+ static std::string kInterDisjointMemPar = "inter-disjoint";
+@@ -55,9 +62,9 @@ MemSSA::MemSSA(BVDataPTAImpl* p, bool ptrOnlyMSSA) : df(nullptr),dt(nullptr)
+     assert((pta->getAnalysisTy()!=PointerAnalysis::Default_PTA)
+            && "please specify a pointer analysis");
+ 
+-    if (!Options::MemPar.getValue().empty())
++    if (!MemPar.getValue().empty())
+     {
+-        std::string strategy = Options::MemPar.getValue();
++        std::string strategy = MemPar.getValue();
+         if (strategy == kDistinctMemPar)
+             mrGen = new DistinctMRG(pta, ptrOnlyMSSA);
+         else if (strategy == kIntraDisjointMemPar)
+@@ -600,13 +607,16 @@ u32_t MemSSA::getBBPhiNum() const
+  */
+ void MemSSA::dumpMSSA(raw_ostream& Out)
+ {
++    if (!DumpMSSA)
++        return;
++
+     PAG* pag = pta->getPAG();
+ 
+     for (SVFModule::iterator fit = pta->getModule()->begin(), efit = pta->getModule()->end();
+             fit != efit; ++fit)
+     {
+         const SVFFunction* fun = *fit;
+-        if(Options::MSSAFun!="" && Options::MSSAFun!=fun->getName())
++        if(MSSAFun!="" && MSSAFun!=fun->getName())
+             continue;
+ 
+         Out << "==========FUNCTION: " << fun->getName() << "==========\n";
+diff --git a/lib/MSSA/SVFGBuilder.cpp b/lib/MSSA/SVFGBuilder.cpp
+index 26e221cb..f5ec991d 100644
+--- a/lib/MSSA/SVFGBuilder.cpp
++++ b/lib/MSSA/SVFGBuilder.cpp
+@@ -26,7 +26,6 @@
+  *  Created on: Apr 15, 2014
+  *      Author: Yulei Sui
+  */
+-#include "Util/Options.h"
+ #include "Util/SVFModule.h"
+ #include "SVF-FE/LLVMUtil.h"
+ #include "MSSA/MemSSA.h"
+@@ -37,28 +36,42 @@
+ using namespace SVF;
+ using namespace SVFUtil;
+ 
++static llvm::cl::opt<bool> SVFGWithIndirectCall("svfgWithIndCall", llvm::cl::init(false),
++        llvm::cl::desc("Update Indirect Calls for SVFG using pre-analysis"));
++
++static llvm::cl::opt<bool> SingleVFG("singleVFG", llvm::cl::init(false),
++                                     llvm::cl::desc("Create a single VFG shared by multiple analysis"));
++
++static llvm::cl::opt<bool> OPTSVFG("optSVFG", llvm::cl::init(true),
++                                   llvm::cl::desc("unoptimized SVFG with formal-in and actual-out"));
++
++static llvm::cl::opt<bool> DumpVFG("dump-svfg", llvm::cl::init(false),
++                                   llvm::cl::desc("Dump dot graph of SVFG"));
++
+ 
+ SVFG* SVFGBuilder::globalSvfg = nullptr;
+ 
+ 
+ SVFG* SVFGBuilder::buildPTROnlySVFG(BVDataPTAImpl* pta)
+ {
+-    return build(pta, VFG::PTRONLYSVFG_OPT);
++    return build(pta, VFG::PTRONLYSVFGK);
+ }
+ 
+ SVFG* SVFGBuilder::buildPTROnlySVFGWithoutOPT(BVDataPTAImpl* pta)
+ {
+-    return build(pta, VFG::PTRONLYSVFG);
++    OPTSVFG = false;
++    return build(pta, VFG::PTRONLYSVFGK);
+ }
+ 
+ SVFG* SVFGBuilder::buildFullSVFG(BVDataPTAImpl* pta)
+ {
+-    return build(pta, VFG::FULLSVFG_OPT);
++    return build(pta, VFG::ORIGSVFGK);
+ }
+ 
+ SVFG* SVFGBuilder::buildFullSVFGWithoutOPT(BVDataPTAImpl* pta)
+ {
+-    return build(pta, VFG::FULLSVFG);
++    OPTSVFG = false;
++    return build(pta, VFG::ORIGSVFGK);
+ }
+ 
+ 
+@@ -77,15 +90,15 @@ void SVFGBuilder::buildSVFG()
+ SVFG* SVFGBuilder::build(BVDataPTAImpl* pta, VFG::VFGK kind)
+ {
+ 
+-    MemSSA* mssa = buildMSSA(pta, (VFG::PTRONLYSVFG==kind || VFG::PTRONLYSVFG_OPT==kind));
++    MemSSA* mssa = buildMSSA(pta, (VFG::PTRONLYSVFGK==kind));
+ 
+     DBOUT(DGENERAL, outs() << pasMsg("Build Sparse Value-Flow Graph \n"));
+-    if(Options::SingleVFG)
++    if(SingleVFG)
+     {
+         if(globalSvfg==nullptr)
+         {
+             /// Note that we use callgraph from andersen analysis here
+-            if(kind == VFG::FULLSVFG_OPT || kind == VFG::PTRONLYSVFG_OPT)
++            if(OPTSVFG)
+                 svfg = globalSvfg = new SVFGOPT(mssa, kind);
+             else
+                 svfg = globalSvfg = new SVFG(mssa, kind);
+@@ -94,7 +107,7 @@ SVFG* SVFGBuilder::build(BVDataPTAImpl* pta, VFG::VFGK kind)
+     }
+     else
+     {
+-        if(kind == VFG::FULLSVFG_OPT || kind == VFG::PTRONLYSVFG_OPT)
++        if(OPTSVFG)
+             svfg = new SVFGOPT(mssa, kind);
+         else
+             svfg = new SVFG(mssa,kind);
+@@ -102,11 +115,13 @@ SVFG* SVFGBuilder::build(BVDataPTAImpl* pta, VFG::VFGK kind)
+     }
+ 
+     /// Update call graph using pre-analysis results
+-    if(Options::SVFGWithIndirectCall || SVFGWithIndCall)
++    if(SVFGWithIndirectCall || SVFGWithIndCall)
+         svfg->updateCallGraph(pta);
+ 
+-    if(Options::DumpVFG)
+-        svfg->dump("svfg_final");
++    svfg->setDumpVFG(DumpVFG);
++
++    if(DumpVFG)
++    	svfg->dump("svfg_final");
+ 
+     return svfg;
+ }
+@@ -145,10 +160,7 @@ MemSSA* SVFGBuilder::buildMSSA(BVDataPTAImpl* pta, bool ptrOnlyMSSA)
+     }
+ 
+     mssa->performStat();
+-    if (Options::DumpMSSA)
+-    {
+-        mssa->dumpMSSA();
+-    }
++    mssa->dumpMSSA();
+ 
+     return mssa;
+ }
+diff --git a/lib/MTA/FSMPTA.cpp b/lib/MTA/FSMPTA.cpp
+index 448c446e..90ef5529 100644
+--- a/lib/MTA/FSMPTA.cpp
++++ b/lib/MTA/FSMPTA.cpp
+@@ -5,7 +5,6 @@
+  *      Author: Yulei Sui, Peng Di
+  */
+ 
+-#include "Util/Options.h"
+ #include "MTA/FSMPTA.h"
+ #include "MTA/MHP.h"
+ #include "MTA/PCG.h"
+@@ -18,6 +17,13 @@ u32_t MTASVFGBuilder::numOfNewSVFGEdges = 0;
+ u32_t MTASVFGBuilder::numOfRemovedSVFGEdges = 0;
+ u32_t MTASVFGBuilder::numOfRemovedPTS = 0;
+ 
++static llvm::cl::opt<bool> UsePCG("pcgTDEdge", llvm::cl::init(false), llvm::cl::desc("Use PCG lock for non-sparsely adding SVFG edges"));
++static llvm::cl::opt<bool> IntraLock("intralockTDEdge", llvm::cl::init(true), llvm::cl::desc("Use simple intra-procedual lock for adding SVFG edges"));
++static llvm::cl::opt<bool> ReadPrecisionTDEdge("rpTDEdge", llvm::cl::init(false), llvm::cl::desc("perform read precision to refine SVFG edges"));
++
++static llvm::cl::opt<u32_t> AddModelFlag("addTDEdge", llvm::cl::init(0), llvm::cl::desc("Add thread SVFG edges with models: 0 Non Add Edge; 1 NonSparse; "
++        "2 All Optimisation; 3 No MHP; 4 No Alias; 5 No Lock; 6 No Read Precision."));
++
+ /*!
+  *
+  */
+@@ -25,7 +31,7 @@ void MTASVFGBuilder::buildSVFG()
+ {
+     MemSSA* mssa = svfg->getMSSA();
+     svfg->buildSVFG();
+-    if (ADDEDGE_NOEDGE != Options::AddModelFlag)
++    if (ADDEDGE_NOEDGE != AddModelFlag)
+     {
+         DBOUT(DGENERAL, outs() << SVFUtil::pasMsg("FSMPTA adding edge\n"));
+         DBOUT(DMTA, outs() << SVFUtil::pasMsg("FSMPTA adding edge\n"));
+@@ -462,10 +468,10 @@ void MTASVFGBuilder::handleStoreLoad(const StmtSVFGNode* n1,const StmtSVFGNode*
+     const Instruction* i1 = n1->getInst();
+     const Instruction* i2 = n2->getInst();
+     /// MHP
+-    if (ADDEDGE_NOMHP!=Options::AddModelFlag && !mhp->mayHappenInParallel(i1, i2))
++    if (ADDEDGE_NOMHP!=AddModelFlag && !mhp->mayHappenInParallel(i1, i2))
+         return;
+     /// Alias
+-    if (ADDEDGE_NOALIAS!=Options::AddModelFlag && !pta->alias(n1->getPAGDstNodeID(), n2->getPAGSrcNodeID()))
++    if (ADDEDGE_NOALIAS!=AddModelFlag && !pta->alias(n1->getPAGDstNodeID(), n2->getPAGSrcNodeID()))
+         return;
+ 
+ 
+@@ -478,7 +484,7 @@ void MTASVFGBuilder::handleStoreLoad(const StmtSVFGNode* n1,const StmtSVFGNode*
+     /// This constrait is too strong. All cxt lock under different cxt cannot be identified.
+ 
+ 
+-    if (ADDEDGE_NOLOCK!=Options::AddModelFlag && lockana->isProtectedByCommonLock(i1, i2))
++    if (ADDEDGE_NOLOCK!=AddModelFlag && lockana->isProtectedByCommonLock(i1, i2))
+     {
+         if (isTailofSpan(n1) && isHeadofSpan(n2))
+             addTDEdges(n1->getId(), n2->getId(), pts);
+@@ -496,17 +502,17 @@ void MTASVFGBuilder::handleStoreStore(const StmtSVFGNode* n1,const StmtSVFGNode*
+     const Instruction* i1 = n1->getInst();
+     const Instruction* i2 = n2->getInst();
+     /// MHP
+-    if (ADDEDGE_NOMHP!=Options::AddModelFlag && !mhp->mayHappenInParallel(i1, i2))
++    if (ADDEDGE_NOMHP!=AddModelFlag && !mhp->mayHappenInParallel(i1, i2))
+         return;
+     /// Alias
+-    if (ADDEDGE_NOALIAS!=Options::AddModelFlag && !pta->alias(n1->getPAGDstNodeID(), n2->getPAGDstNodeID()))
++    if (ADDEDGE_NOALIAS!=AddModelFlag && !pta->alias(n1->getPAGDstNodeID(), n2->getPAGDstNodeID()))
+         return;
+ 
+     PointsTo pts = pta->getPts(n1->getPAGDstNodeID());
+     pts &= pta->getPts(n2->getPAGDstNodeID());
+ 
+     /// Lock
+-    if (ADDEDGE_NOLOCK!=Options::AddModelFlag && lockana->isProtectedByCommonLock(i1, i2))
++    if (ADDEDGE_NOLOCK!=AddModelFlag && lockana->isProtectedByCommonLock(i1, i2))
+     {
+         if (isTailofSpan(n1) && isHeadofSpan(n2))
+             addTDEdges(n1->getId(), n2->getId(), pts);
+@@ -682,7 +688,7 @@ void MTASVFGBuilder::readPrecision()
+ void MTASVFGBuilder::connectMHPEdges(PointerAnalysis* pta)
+ {
+     PCG* pcg;
+-    if (ADDEDGE_NONSPARSE==Options::AddModelFlag)
++    if (ADDEDGE_NONSPARSE==AddModelFlag)
+     {
+         pcg= new PCG(pta);
+         pcg->analyze();
+@@ -702,9 +708,9 @@ void MTASVFGBuilder::connectMHPEdges(PointerAnalysis* pta)
+         {
+             const StmtSVFGNode* n2 = SVFUtil::cast<StmtSVFGNode>(*it2);
+             const Instruction* i2 = n2->getInst();
+-            if (ADDEDGE_NONSPARSE==Options::AddModelFlag)
++            if (ADDEDGE_NONSPARSE==AddModelFlag)
+             {
+-                if (Options::UsePCG)
++                if (UsePCG)
+                 {
+                     if (pcg->mayHappenInParallel(i1, i2) || mhp->mayHappenInParallel(i1, i2))
+                         handleStoreLoadNonSparse(n1, n2, pta);
+@@ -724,9 +730,9 @@ void MTASVFGBuilder::connectMHPEdges(PointerAnalysis* pta)
+         {
+             const StmtSVFGNode* n2 = SVFUtil::cast<StmtSVFGNode>(*it2);
+             const Instruction* i2 = n2->getInst();
+-            if (ADDEDGE_NONSPARSE == Options::AddModelFlag)
++            if (ADDEDGE_NONSPARSE == AddModelFlag)
+             {
+-                if (Options::UsePCG)
++                if (UsePCG)
+                 {
+                     if(pcg->mayHappenInParallel(i1, i2) || mhp->mayHappenInParallel(i1, i2))
+                         handleStoreStoreNonSparse(n1, n2, pta);
+@@ -743,7 +749,7 @@ void MTASVFGBuilder::connectMHPEdges(PointerAnalysis* pta)
+         }
+     }
+ 
+-    if(Options::ReadPrecisionTDEdge && ADDEDGE_NORP!=Options::AddModelFlag)
++    if(ReadPrecisionTDEdge && ADDEDGE_NORP!=AddModelFlag)
+     {
+         DBOUT(DGENERAL,outs()<<"Read precision edge removing \n");
+         DBOUT(DMTA,outs()<<"Read precision edge removing \n");
+diff --git a/lib/MTA/LockAnalysis.cpp b/lib/MTA/LockAnalysis.cpp
+index 3e68e7aa..bc952834 100644
+--- a/lib/MTA/LockAnalysis.cpp
++++ b/lib/MTA/LockAnalysis.cpp
+@@ -5,7 +5,6 @@
+  *      Author: pengd
+  */
+ 
+-#include "Util/Options.h"
+ #include "MTA/LockAnalysis.h"
+ #include "MTA/MTA.h"
+ #include "MTA/MTAResultValidator.h"
+@@ -14,6 +13,7 @@
+ using namespace SVF;
+ using namespace SVFUtil;
+ 
++static llvm::cl::opt<bool> PrintLockSpan("print-lock", llvm::cl::init(false), llvm::cl::desc("Print Thread Interleaving Results"));
+ 
+ namespace SVF
+ {
+diff --git a/lib/MTA/MHP.cpp b/lib/MTA/MHP.cpp
+index dcec3726..3658fa56 100644
+--- a/lib/MTA/MHP.cpp
++++ b/lib/MTA/MHP.cpp
+@@ -5,7 +5,7 @@
+  *      Author: Yulei Sui, Peng Di
+  */
+ 
+-#include "Util/Options.h"
++
+ #include "MTA/MHP.h"
+ #include "MTA/MTA.h"
+ #include "MTA/LockAnalysis.h"
+@@ -17,6 +17,10 @@ using namespace SVF;
+ using namespace SVFUtil;
+ 
+ 
++static llvm::cl::opt<bool> PrintInterLev("print-interlev", llvm::cl::init(false),llvm::cl::desc("Print Thread Interleaving Results"));
++static llvm::cl::opt<bool> DoLockAnalysis("lockanalysis", llvm::cl::init(true),llvm::cl::desc("Run Lock Analysis"));
++
++
+ /*!
+  * Get the base pointer from any GEP.
+  */
+@@ -170,7 +174,7 @@ void MHP::analyzeInterleaving()
+     updateNonCandidateFunInterleaving();
+ 
+ 
+-    if(Options::PrintInterLev)
++    if(PrintInterLev)
+         printInterleaving();
+ 
+     validateResults();
+diff --git a/lib/MTA/MTA.cpp b/lib/MTA/MTA.cpp
+index e99ebce7..ac1c2468 100644
+--- a/lib/MTA/MTA.cpp
++++ b/lib/MTA/MTA.cpp
+@@ -5,7 +5,6 @@
+  *      Author: Yulei Sui, Peng Di
+  */
+ 
+-#include "Util/Options.h"
+ #include "MTA/MTA.h"
+ #include "MTA/MHP.h"
+ #include "MTA/TCT.h"
+@@ -20,6 +19,10 @@ using namespace SVFUtil;
+ 
+ static llvm::RegisterPass<MTA> RACEDETECOR("pmhp", "May-Happen-in-Parallel Analysis");
+ 
++static llvm::cl::opt<bool> AndersenAnno("tsan-ander", llvm::cl::init(false), llvm::cl::desc("Add TSan annotation according to Andersen"));
++
++static llvm::cl::opt<bool> FSAnno("tsan-fs", llvm::cl::init(false), llvm::cl::desc("Add TSan annotation according to flow-sensitive analysis"));
++
+ 
+ char MTA::ID = 0;
+ ModulePass* MTA::modulePass = nullptr;
+@@ -61,12 +64,12 @@ bool MTA::runOnModule(SVFModule* module)
+ 
+ 
+     /*
+-    if (Options::AndersenAnno) {
++    if (AndersenAnno) {
+         pta = mhp->getTCT()->getPTA();
+         if (pta->printStat())
+             stat->performMHPPairStat(mhp,lsa);
+         AndersenWaveDiff::releaseAndersenWaveDiff();
+-    } else if (Options::FSAnno) {
++    } else if (FSAnno) {
+ 
+         reportMemoryUsageKB("Mem before analysis");
+         DBOUT(DGENERAL, outs() << pasMsg("FSMPTA analysis\n"));
+diff --git a/lib/MTA/MTAAnnotator.cpp b/lib/MTA/MTAAnnotator.cpp
+index 629418b8..96c28228 100644
+--- a/lib/MTA/MTAAnnotator.cpp
++++ b/lib/MTA/MTAAnnotator.cpp
+@@ -5,7 +5,6 @@
+  *      Author: Yulei Sui, Peng Di
+  */
+ 
+-#include "Util/Options.h"
+ #include "MTA/MTAAnnotator.h"
+ #include "MTA/LockAnalysis.h"
+ #include <sstream>
+@@ -13,6 +12,7 @@
+ using namespace SVF;
+ using namespace SVFUtil;
+ 
++static llvm::cl::opt<u32_t> AnnoFlag("anno", llvm::cl::init(0), llvm::cl::desc("prune annotated instructions: 0001 Thread Local; 0002 Alias; 0004 MHP."));
+ 
+ void MTAAnnotator::annotateDRCheck(Instruction* inst)
+ {
+@@ -105,14 +105,14 @@ void MTAAnnotator::initialize(MHP* m, LockAnalysis* la)
+ {
+     mhp = m;
+     lsa = la;
+-    if (!Options::AnnoFlag)
++    if (!AnnoFlag)
+         return;
+     collectLoadStoreInst(mhp->getTCT()->getPTA()->getModule());
+ }
+ 
+ void MTAAnnotator::pruneThreadLocal(PointerAnalysis* pta)
+ {
+-    bool AnnoLocal = Options::AnnoFlag & ANNO_LOCAL;
++    bool AnnoLocal = AnnoFlag & ANNO_LOCAL;
+     if (!AnnoLocal)
+         return;
+ 
+@@ -199,8 +199,8 @@ void MTAAnnotator::pruneThreadLocal(PointerAnalysis* pta)
+ void MTAAnnotator::pruneAliasMHP(PointerAnalysis* pta)
+ {
+ 
+-    bool AnnoMHP = Options::AnnoFlag & ANNO_MHP;
+-    bool AnnoAlias = Options::AnnoFlag & ANNO_ALIAS;
++    bool AnnoMHP = AnnoFlag & ANNO_MHP;
++    bool AnnoAlias = AnnoFlag & ANNO_ALIAS;
+ 
+     if (!AnnoMHP && !AnnoAlias)
+         return;
+@@ -268,7 +268,7 @@ void MTAAnnotator::pruneAliasMHP(PointerAnalysis* pta)
+ }
+ void MTAAnnotator::performAnnotate()
+ {
+-    if (!Options::AnnoFlag)
++    if (!AnnoFlag)
+         return;
+     for (InstSet::iterator it = storeset.begin(), eit = storeset.end(); it != eit; ++it)
+     {
+diff --git a/lib/MTA/MTAResultValidator.cpp b/lib/MTA/MTAResultValidator.cpp
+index 439f8faf..8cd3a914 100644
+--- a/lib/MTA/MTAResultValidator.cpp
++++ b/lib/MTA/MTAResultValidator.cpp
+@@ -5,7 +5,6 @@
+  *      Author: Peng Di
+  */
+ 
+-#include "Util/Options.h"
+ #include <string>
+ #include <sstream>
+ 
+@@ -14,6 +13,7 @@
+ using namespace SVF;
+ using namespace SVFUtil;
+ 
++static llvm::cl::opt<bool> PrintValidRes("print-MHP-validation", llvm::cl::init(false), llvm::cl::desc("Print MHP Validation Results"));
+ 
+ void MTAResultValidator::analyze()
+ {
+@@ -307,7 +307,7 @@ bool MTAResultValidator::validateCxtThread()
+     if (tct->getTCTNodeNum() != vthdToCxt.size())
+     {
+         res = false;
+-        if (Options::PrintValidRes)
++        if (PrintValidRes)
+         {
+             outs() << "\nValidate CxtThread: The number of CxtThread is different from given result!!!\n";
+             outs() << "Given threads:\t" << vthdToCxt.size() << "\nAnalysis result:\t" << tct->getTCTNodeNum() << "\n";
+@@ -328,7 +328,7 @@ bool MTAResultValidator::validateCxtThread()
+                 if (visitedvthd.find(vthdid) != visitedvthd.end())
+                 {
+                     res = false;
+-                    if (Options::PrintValidRes)
++                    if (PrintValidRes)
+                     {
+                         outs() << "\nValidate CxtThread: Repeat real CxtThread !!!\n";
+                         rthd.dump();
+@@ -345,7 +345,7 @@ bool MTAResultValidator::validateCxtThread()
+         if (!matched)
+         {
+             res = false;
+-            if (Options::PrintValidRes)
++            if (PrintValidRes)
+             {
+                 outs() << "\nValidate CxtThread: Cannot match real CxtThread !!!\n";
+                 rthd.dump();
+@@ -355,7 +355,7 @@ bool MTAResultValidator::validateCxtThread()
+     if (visitedvthd.size() != vthdToCxt.size())
+     {
+         res = false;
+-        if (Options::PrintValidRes)
++        if (PrintValidRes)
+         {
+             outs() << "\nValidate CxtThread: Some given CxtThreads cannot be found !!!\n";
+             for (Map<NodeID, CallStrCxt>::iterator j = vthdToCxt.begin(), ej = vthdToCxt.end(); j != ej; j++)
+@@ -400,7 +400,7 @@ bool MTAResultValidator::validateTCT()
+                 res_node = false;
+             }
+         }
+-        if ((!res_node) && Options::PrintValidRes)
++        if ((!res_node) && PrintValidRes)
+         {
+             outs() << "Validate TCT: Wrong at TID " << rthdTovthd[i] << "\n";
+             outs() << "Given children: \t";
+@@ -434,7 +434,7 @@ MTAResultValidator::INTERLEV_FLAG MTAResultValidator::validateInterleaving()
+ 
+         if ((*seti).second.size() != tsSet.size())
+         {
+-            if (Options::PrintValidRes)
++            if (PrintValidRes)
+             {
+                 outs() << "\nValidate Interleaving: Wrong at (" << SVFUtil::getSourceLoc(inst) << ")\n";
+                 outs() << "Reason: The number of thread running on stmt is wrong\n";
+@@ -471,7 +471,7 @@ MTAResultValidator::INTERLEV_FLAG MTAResultValidator::validateInterleaving()
+                     NodeBS lev2 = threadStmtToInterLeaving[ts2];
+                     if (lev != lev2)
+                     {
+-                        if (Options::PrintValidRes)
++                        if (PrintValidRes)
+                         {
+                             outs() << "\nValidate Interleaving: Wrong at (" << SVFUtil::getSourceLoc(inst) << ")\n";
+                             outs() << "Reason: thread interleaving on stmt is wrong\n";
+@@ -507,7 +507,7 @@ MTAResultValidator::INTERLEV_FLAG MTAResultValidator::validateInterleaving()
+ 
+             if (!matched)
+             {
+-                if (Options::PrintValidRes)
++                if (PrintValidRes)
+                 {
+                     outs() << "\nValidate Interleaving: Wrong at (" << SVFUtil::getSourceLoc(inst) << ")\n";
+                     outs() << "Reason: analysis thread cxt is not matched by given thread cxt\n";
+diff --git a/lib/MTA/MTAStat.cpp b/lib/MTA/MTAStat.cpp
+index 48c996a2..4fbe450a 100644
+--- a/lib/MTA/MTAStat.cpp
++++ b/lib/MTA/MTAStat.cpp
+@@ -5,7 +5,6 @@
+  *      Author: Yulei Sui, Peng Di
+  */
+ 
+-#include "Util/Options.h"
+ #include "MTA/MTAStat.h"
+ #include "MTA/TCT.h"
+ #include "MTA/MHP.h"
+@@ -16,6 +15,7 @@
+ 
+ using namespace SVF;
+ 
++static llvm::cl::opt<bool> AllPairMHP("allpairMhp", llvm::cl::init(false), llvm::cl::desc("All pair MHP computation"));
+ 
+ /*!
+  * Statistics for thread call graph
+@@ -91,7 +91,7 @@ void MTAStat::performTCTStat(TCT* tct)
+ void MTAStat::performMHPPairStat(MHP* mhp, LockAnalysis* lsa)
+ {
+ 
+-    if(Options::AllPairMHP)
++    if(AllPairMHP)
+     {
+         InstSet instSet1;
+         InstSet instSet2;
+diff --git a/lib/MTA/PCG.cpp b/lib/MTA/PCG.cpp
+index 498604dc..a2803579 100644
+--- a/lib/MTA/PCG.cpp
++++ b/lib/MTA/PCG.cpp
+@@ -5,7 +5,6 @@
+  *      Author: Yulei Sui, Peng Di
+  */
+ 
+-#include "Util/Options.h"
+ #include "MTA/PCG.h"
+ #include "Util/SVFUtil.h"
+ 
+@@ -31,7 +30,7 @@ bool PCG::analyze()
+ 
+     //interferenceAnalysis();
+ 
+-    //if (Options::TDPrint) {
++    //if (TDPrint) {
+     //printResults();
+     //tdAPI->performAPIStat(mod);
+     //}
+diff --git a/lib/MTA/TCT.cpp b/lib/MTA/TCT.cpp
+index bd2776fe..5af71739 100644
+--- a/lib/MTA/TCT.cpp
++++ b/lib/MTA/TCT.cpp
+@@ -5,7 +5,6 @@
+  *      Author: Yulei Sui, Peng Di
+  */
+ 
+-#include "Util/Options.h"
+ #include "MTA/TCT.h"
+ #include "MTA/MTA.h"
+ #include "Util/DataFlowUtil.h"
+@@ -15,6 +14,8 @@
+ using namespace SVF;
+ using namespace SVFUtil;
+ 
++static llvm::cl::opt<bool> TCTDotGraph("dump-tct", llvm::cl::init(false), llvm::cl::desc("Dump dot graph of Call Graph"));
++
+ /*!
+  * An instruction i is in loop
+  * (1) the instruction i itself
+@@ -430,7 +431,7 @@ void TCT::build()
+ 
+     collectMultiForkedThreads();
+ 
+-    if (Options::TCTDotGraph)
++    if (TCTDotGraph)
+     {
+         print();
+         dump("tct");
+@@ -539,7 +540,7 @@ void TCT::dumpCxt(CallStrCxt& cxt)
+  */
+ void TCT::dump(const std::string& filename)
+ {
+-    if (Options::TCTDotGraph)
++    if (TCTDotGraph)
+         GraphPrinter::WriteGraphToFile(outs(), filename, this);
+ }
+ 
+diff --git a/lib/MemoryModel/LocationSet.cpp b/lib/MemoryModel/LocationSet.cpp
+index 8ac5dfa8..099d06a1 100644
+--- a/lib/MemoryModel/LocationSet.cpp
++++ b/lib/MemoryModel/LocationSet.cpp
+@@ -29,12 +29,13 @@
+  *
+  */
+ 
+-#include "Util/Options.h"
+ #include "MemoryModel/LocationSet.h"
+ #include "MemoryModel/MemModel.h"
+ 
+ using namespace SVF;
+ 
++static llvm::cl::opt<bool> singleStride("stride-only", llvm::cl::init(false),
++                                        llvm::cl::desc("Only use single stride in LocMemoryModel"));
+ 
+ /*!
+  * Add element num and stride pair
+@@ -46,7 +47,7 @@ void LocationSet::addElemNumStridePair(const NodePair& pair)
+     if (pair.first == 0 || pair.second == 0)
+         return;
+ 
+-    if (Options::SingleStride)
++    if (singleStride)
+     {
+         if (numStridePair.empty())
+             numStridePair.push_back(std::make_pair(StInfo::getMaxFieldLimit(),pair.second));
+diff --git a/lib/MemoryModel/PointerAnalysis.cpp b/lib/MemoryModel/PointerAnalysis.cpp
+index 04f46c08..3c49d905 100644
+--- a/lib/MemoryModel/PointerAnalysis.cpp
++++ b/lib/MemoryModel/PointerAnalysis.cpp
+@@ -27,7 +27,6 @@
+  *      Author: Yulei Sui
+  */
+ 
+-#include "Util/Options.h"
+ #include "SVF-FE/CallGraphBuilder.h"
+ #include "SVF-FE/CHG.h"
+ #include "SVF-FE/DCHG.h"
+@@ -51,6 +50,50 @@ using namespace SVF;
+ using namespace SVFUtil;
+ using namespace cppUtil;
+ 
++static llvm::cl::opt<bool> TYPEPrint("print-type", llvm::cl::init(false),
++                                     llvm::cl::desc("Print type"));
++
++static llvm::cl::opt<bool> FuncPointerPrint("print-fp", llvm::cl::init(false),
++        llvm::cl::desc("Print targets of indirect call site"));
++
++static llvm::cl::opt<bool> PTSPrint("print-pts", llvm::cl::init(false),
++                                    llvm::cl::desc("Print points-to set of top-level pointers"));
++
++static llvm::cl::opt<bool> PTSAllPrint("print-all-pts", llvm::cl::init(false),
++                                       llvm::cl::desc("Print all points-to set of both top-level and address-taken variables"));
++
++static llvm::cl::opt<bool> PStat("stat", llvm::cl::init(true),
++                                 llvm::cl::desc("Statistic for Pointer analysis"));
++
++static llvm::cl::opt<unsigned> statBudget("statlimit",  llvm::cl::init(20),
++        llvm::cl::desc("Iteration budget for On-the-fly statistics"));
++
++static llvm::cl::opt<bool> PAGDotGraph("dump-pag", llvm::cl::init(false),
++                                       llvm::cl::desc("Dump dot graph of PAG"));
++
++static llvm::cl::opt<bool> DumpICFG("dump-icfg", llvm::cl::init(false),
++                                    llvm::cl::desc("Dump dot graph of ICFG"));
++
++static llvm::cl::opt<bool> CallGraphDotGraph("dump-callgraph", llvm::cl::init(false),
++        llvm::cl::desc("Dump dot graph of Call Graph"));
++
++static llvm::cl::opt<bool> PAGPrint("print-pag", llvm::cl::init(false),
++                                    llvm::cl::desc("Print PAG to command line"));
++
++static llvm::cl::opt<unsigned> IndirectCallLimit("indCallLimit",  llvm::cl::init(50000),
++        llvm::cl::desc("Indirect solved call edge limit"));
++
++static llvm::cl::opt<bool> UsePreCompFieldSensitive("preFieldSensitive", llvm::cl::init(true),
++        llvm::cl::desc("Use pre-computed field-sensitivity for later analysis"));
++
++static llvm::cl::opt<bool> EnableAliasCheck("alias-check", llvm::cl::init(true),
++        llvm::cl::desc("Enable alias check functions"));
++
++static llvm::cl::opt<bool> EnableThreadCallGraph("enable-tcg", llvm::cl::init(true),
++        llvm::cl::desc("Enable pointer analysis to use thread call graph"));
++
++static llvm::cl::opt<bool> connectVCallOnCHA("vcall-cha", llvm::cl::init(false),
++        llvm::cl::desc("connect virtual calls using cha"));
+ 
+ CommonCHGraph* PointerAnalysis::chgraph = nullptr;
+ PAG* PointerAnalysis::pag = nullptr;
+@@ -75,10 +118,10 @@ PointerAnalysis::PointerAnalysis(PAG* p, PTATY ty, bool alias_check) :
+     svfMod(nullptr),ptaTy(ty),stat(nullptr),ptaCallGraph(nullptr),callGraphSCC(nullptr),icfg(nullptr),typeSystem(nullptr)
+ {
+     pag = p;
+-	OnTheFlyIterBudgetForStat = Options::StatBudget;
+-    print_stat = Options::PStat;
++	OnTheFlyIterBudgetForStat = statBudget;
++    print_stat = PStat;
+     ptaImplTy = BaseImpl;
+-    alias_validation = (alias_check && Options::EnableAliasCheck);
++    alias_validation = (alias_check && EnableAliasCheck);
+ }
+ 
+ /*!
+@@ -133,15 +176,15 @@ void PointerAnalysis::initialize()
+         pag->dump("pag_initial");
+ 
+     // dump ICFG
+-    if (Options::DumpICFG)
++    if (DumpICFG)
+     	pag->getICFG()->dump("icfg_initial");
+ 
+     // print to command line of the PAG graph
+-    if (Options::PAGPrint)
++    if (PAGPrint)
+         pag->print();
+ 
+     /// initialise pta call graph for every pointer analysis instance
+-    if(Options::EnableThreadCallGraph)
++    if(EnableThreadCallGraph)
+     {
+         ThreadCallGraph* cg = new ThreadCallGraph();
+         ThreadCallGraphBuilder bd(cg, pag->getICFG());
+@@ -156,7 +199,7 @@ void PointerAnalysis::initialize()
+     callGraphSCCDetection();
+ 
+     // dump callgraph
+-	if (Options::CallGraphDotGraph)
++	if (CallGraphDotGraph)
+ 		getPTACallGraph()->dump("callgraph_initial");
+ }
+ 
+@@ -196,7 +239,7 @@ void PointerAnalysis::resetObjFieldSensitive()
+  */
+ bool PointerAnalysis::dumpGraph()
+ {
+-    return Options::PAGDotGraph;
++    return PAGDotGraph;
+ }
+ 
+ /*
+@@ -226,33 +269,31 @@ void PointerAnalysis::finalize()
+         pag->dump("pag_final");
+ 
+     // dump ICFG
+-    if (Options::DumpICFG){
+-		pag->getICFG()->updateCallGraph(ptaCallGraph);
+-		pag->getICFG()->dump("icfg_final");
+-    }
++    if (DumpICFG)
++    	pag->getICFG()->dump("icfg_final");
+ 
+     if (!DumpPAGFunctions.empty()) ExternalPAG::dumpFunctions(DumpPAGFunctions);
+ 
+     /// Dump results
+-    if (Options::PTSPrint)
++    if (PTSPrint)
+     {
+         dumpTopLevelPtsTo();
+         //dumpAllPts();
+         //dumpCPts();
+     }
+ 
+-    if (Options::TypePrint)
++    if (TYPEPrint)
+         dumpAllTypes();
+ 
+-    if(Options::PTSAllPrint)
++    if(PTSAllPrint)
+         dumpAllPts();
+ 
+-    if (Options::FuncPointerPrint)
++    if (FuncPointerPrint)
+         printIndCSTargets();
+ 
+     getPTACallGraph()->verifyCallGraph();
+ 
+-	if (Options::CallGraphDotGraph)
++	if (CallGraphDotGraph)
+ 		getPTACallGraph()->dump("callgraph_final");
+ 
+     // FSTBHC has its own TBHC-specific test validation.
+@@ -260,7 +301,7 @@ void PointerAnalysis::finalize()
+             && !SVFUtil::isa<FlowSensitiveTBHC>(this))
+         validateTests();
+ 
+-    if (!Options::UsePreCompFieldSensitive)
++    if (!UsePreCompFieldSensitive)
+         resetObjFieldSensitive();
+ }
+ 
+@@ -440,7 +481,7 @@ void PointerAnalysis::resolveIndCalls(const CallBlockNode* cs, const PointsTo& t
+             ii != ie; ii++)
+     {
+ 
+-        if(getNumOfResolvedIndCallEdge() >= Options::IndirectCallLimit)
++        if(getNumOfResolvedIndCallEdge() >= IndirectCallLimit)
+         {
+             wrnMsg("Resolved Indirect Call Edges are Out-Of-Budget, please increase the limit");
+             return;
+@@ -552,7 +593,7 @@ void PointerAnalysis::resolveCPPIndCalls(const CallBlockNode* cs, const PointsTo
+     assert(isVirtualCallSite(SVFUtil::getLLVMCallSite(cs->getCallSite())) && "not cpp virtual call");
+ 
+     VFunSet vfns;
+-    if (Options::ConnectVCallOnCHA)
++    if (connectVCallOnCHA)
+         getVFnsFromCHA(cs, vfns);
+     else
+         getVFnsFromPts(cs, target, vfns);
+diff --git a/lib/MemoryModel/PointerAnalysisImpl.cpp b/lib/MemoryModel/PointerAnalysisImpl.cpp
+index db9f2e3b..14eb0cea 100644
+--- a/lib/MemoryModel/PointerAnalysisImpl.cpp
++++ b/lib/MemoryModel/PointerAnalysisImpl.cpp
+@@ -6,11 +6,9 @@
+  */
+ 
+ 
+-#include "Util/Options.h"
+ #include "MemoryModel/PointerAnalysisImpl.h"
+ #include "SVF-FE/CPPUtil.h"
+ #include "SVF-FE/DCHG.h"
+-#include "Util/Options.h"
+ #include <fstream>
+ #include <sstream>
+ 
+@@ -19,6 +17,9 @@ using namespace SVFUtil;
+ using namespace cppUtil;
+ using namespace std;
+ 
++static llvm::cl::opt<bool> INCDFPTData("incdata", llvm::cl::init(true),
++                                       llvm::cl::desc("Enable incremental DFPTData for flow-sensitive analysis"));
++
+ 
+ /*!
+  * Constructor
+@@ -28,18 +29,13 @@ BVDataPTAImpl::BVDataPTAImpl(PAG* p, PointerAnalysis::PTATY type, bool alias_che
+ {
+     if (type == Andersen_BASE || type == Andersen_WPA || type == AndersenWaveDiff_WPA || type == AndersenHCD_WPA || type == AndersenHLCD_WPA
+             || type == AndersenLCD_WPA || type == TypeCPP_WPA || type == FlowS_DDA || type == AndersenWaveDiffWithType_WPA
+-            || type == AndersenSCD_WPA || type == AndersenSFR_WPA)
+-    {
+-        // Only maintain reverse points-to when the analysis is field-sensitive.
+-        ptD = new MutDiffPTDataTy(Options::MaxFieldLimit != 0);
+-    }
+-    else if (type == Steensgaard_WPA)
++            || type == AndersenSCD_WPA || type == AndersenSFR_WPA || type == Steensgaard_WPA)
+     {
+-        ptD = new MutDiffPTDataTy(false);
++        ptD = new MutDiffPTDataTy();
+     }
+     else if (type == FSSPARSE_WPA || type == FSTBHC_WPA)
+     {
+-        if (Options::INCDFPTData)
++        if (INCDFPTData)
+             ptD = new IncMutDFPTDataTy(false);
+         else
+             ptD = new MutDFPTDataTy(false);
+@@ -88,8 +84,11 @@ void BVDataPTAImpl::writeToFile(const string& filename)
+     }
+ 
+     // Write analysis results to file
+-
+-    for (auto it = pag->begin(), ie = pag->end(); it != ie; ++it)
++    PTDataTy *ptD = getPTDataTy();
++    if (hasPtsMap())
++    {
++        auto &ptsMap = getPtsMap();
++        for (auto it = ptsMap.begin(), ie = ptsMap.end(); it != ie; ++it)
+         {
+             NodeID var = it->first;
+             const PointsTo &pts = getPts(var);
+@@ -107,9 +106,9 @@ void BVDataPTAImpl::writeToFile(const string& filename)
+                 }
+             }
+             F.os() << "}\n";
++        }
+     }
+ 
+-
+     // Write GepPAGNodes to file
+     for (auto it = pag->begin(), ie = pag->end(); it != ie; ++it)
+     {
+diff --git a/lib/SABER/LeakChecker.cpp b/lib/SABER/LeakChecker.cpp
+index 9a68b900..04e50590 100644
+--- a/lib/SABER/LeakChecker.cpp
++++ b/lib/SABER/LeakChecker.cpp
+@@ -27,13 +27,14 @@
+  *      Author: Yulei Sui
+  */
+ 
+-#include "Util/Options.h"
+ #include "SVF-FE/LLVMUtil.h"
+ #include "SABER/LeakChecker.h"
+ 
+ using namespace SVF;
+ using namespace SVFUtil;
+ 
++static llvm::cl::opt<bool> ValidateTests("valid-tests", llvm::cl::init(false),
++        llvm::cl::desc("Validate memory leak tests"));
+ 
+ /*!
+  * Initialize sources
+@@ -163,7 +164,7 @@ void LeakChecker::reportBug(ProgSlice* slice)
+         slice->annotatePaths();
+     }
+ 
+-    if(Options::ValidateTests)
++    if(ValidateTests)
+         testsValidation(slice);
+ }
+ 
+diff --git a/lib/SABER/SaberSVFGBuilder.cpp b/lib/SABER/SaberSVFGBuilder.cpp
+index 0a37cd26..29984f16 100644
+--- a/lib/SABER/SaberSVFGBuilder.cpp
++++ b/lib/SABER/SaberSVFGBuilder.cpp
+@@ -152,7 +152,7 @@ void SaberSVFGBuilder::rmDerefDirSVFGEdges(BVDataPTAImpl* pta)
+             if(SVFUtil::isa<StoreSVFGNode>(stmtNode))
+             {
+                 const SVFGNode* def = svfg->getDefSVFGNode(stmtNode->getPAGDstNode());
+-                SVFGEdge* edge = svfg->getIntraVFGEdge(def,stmtNode,SVFGEdge::IntraDirectVF);
++                SVFGEdge* edge = svfg->getSVFGEdge(def,stmtNode,SVFGEdge::IntraDirectVF);
+                 assert(edge && "Edge not found!");
+                 svfg->removeSVFGEdge(edge);
+ 
+@@ -164,7 +164,7 @@ void SaberSVFGBuilder::rmDerefDirSVFGEdges(BVDataPTAImpl* pta)
+             else if(SVFUtil::isa<LoadSVFGNode>(stmtNode))
+             {
+                 const SVFGNode* def = svfg->getDefSVFGNode(stmtNode->getPAGSrcNode());
+-                SVFGEdge* edge = svfg->getIntraVFGEdge(def,stmtNode,SVFGEdge::IntraDirectVF);
++                SVFGEdge* edge = svfg->getSVFGEdge(def,stmtNode,SVFGEdge::IntraDirectVF);
+                 assert(edge && "Edge not found!");
+                 svfg->removeSVFGEdge(edge);
+ 
+diff --git a/lib/SABER/SrcSnkDDA.cpp b/lib/SABER/SrcSnkDDA.cpp
+index 5a0e856f..72dccbfb 100644
+--- a/lib/SABER/SrcSnkDDA.cpp
++++ b/lib/SABER/SrcSnkDDA.cpp
+@@ -28,7 +28,6 @@
+  */
+ 
+ 
+-#include "Util/Options.h"
+ #include "SABER/SrcSnkDDA.h"
+ #include "Graphs/SVFGStat.h"
+ #include "SVF-FE/PAGBuilder.h"
+@@ -36,6 +35,12 @@
+ using namespace SVF;
+ using namespace SVFUtil;
+ 
++static llvm::cl::opt<bool> DumpSlice("dump-slice", llvm::cl::init(false),
++                                     llvm::cl::desc("Dump dot graph of Saber Slices"));
++
++static llvm::cl::opt<unsigned> cxtLimit("cxtlimit",  llvm::cl::init(3),
++                                        llvm::cl::desc("Source-Sink Analysis Contexts Limit"));
++
+ /// Initialize analysis
+ void SrcSnkDDA::initialize(SVFModule* module)
+ {
+@@ -59,7 +64,7 @@ void SrcSnkDDA::analyze(SVFModule* module)
+ 
+     initialize(module);
+ 
+-    ContextCond::setMaxCxtLen(Options::CxtLimit);
++    ContextCond::setMaxCxtLen(cxtLimit);
+ 
+     for (SVFGNodeSetIter iter = sourcesBegin(), eiter = sourcesEnd();
+             iter != eiter; ++iter)
+@@ -91,7 +96,7 @@ void SrcSnkDDA::analyze(SVFModule* module)
+ 
+             DBOUT(DSaber, outs() << "Backward process for slice:" << (*iter)->getId() << " (size = " << getCurSlice()->getBackwardSliceSize() << ")\n");
+ 
+-            if(Options::DumpSlice)
++            if(DumpSlice)
+                 annotateSlice(_curSlice);
+ 
+             if(_curSlice->AllPathReachableSolve()== true)
+@@ -277,7 +282,7 @@ void SrcSnkDDA::annotateSlice(ProgSlice* slice)
+ void SrcSnkDDA::dumpSlices()
+ {
+ 
+-    if(Options::DumpSlice)
++    if(DumpSlice)
+         const_cast<SVFG*>(getSVFG())->dump("Slice",true);
+ }
+ 
+diff --git a/lib/SVF-FE/CHG.cpp b/lib/SVF-FE/CHG.cpp
+index c875e247..00bfbcfd 100644
+--- a/lib/SVF-FE/CHG.cpp
++++ b/lib/SVF-FE/CHG.cpp
+@@ -36,7 +36,6 @@
+ #include <assert.h>
+ #include <stack>
+ 
+-#include "Util/Options.h"
+ #include "SVF-FE/CPPUtil.h"
+ #include "SVF-FE/CHG.h"
+ #include "SVF-FE/SymbolTableInfo.h"
+@@ -49,6 +48,7 @@ using namespace SVFUtil;
+ using namespace cppUtil;
+ using namespace std;
+ 
++static llvm::cl::opt<bool> dumpCHA("dump-cha", llvm::cl::init(false), llvm::cl::desc("dump the class hierarchy graph"));
+ 
+ const string pureVirtualFunName = "__cxa_pure_virtual";
+ 
+@@ -112,7 +112,7 @@ void CHGraph::buildCHG()
+     timeEnd = CLOCK_IN_MS();
+     buildingCHGTime = (timeEnd - timeStart) / TIMEINTERVAL;
+ 
+-    if (Options::DumpCHA)
++    if (dumpCHA)
+         dump("cha");
+ }
+ 
+@@ -383,18 +383,6 @@ const CHGraph::CHNodeSetTy& CHGraph::getInstancesAndDescendants(const string cla
+     }
+ }
+ 
+-
+-void CHGraph::addFuncToFuncVector(CHNode::FuncVector &v, const SVFFunction *f) {
+-    const auto *lf = f->getLLVMFun();
+-    if (isCPPThunkFunction(lf)) {
+-        if(const auto *tf = getThunkTarget(lf))
+-            v.push_back(svfMod->getSVFFunction(tf));
+-    } else {
+-        v.push_back(f);
+-    }
+-}
+-
+-
+ /*
+  * do the following things:
+  * 1. initialize virtualFunctions for each class
+@@ -520,7 +508,7 @@ void CHGraph::analyzeVTables(const Module &M)
+                             if (const Function* f = SVFUtil::dyn_cast<Function>(bitcastValue))
+                             {
+                                 const SVFFunction* func = LLVMModuleSet::getLLVMModuleSet()->getSVFFunction(f);
+-                                addFuncToFuncVector(virtualFunctions, func);
++                                virtualFunctions.push_back(func);
+                                 if (func->getName().str().compare(pureVirtualFunName) == 0)
+                                 {
+                                     pure_abstract &= true;
+@@ -546,7 +534,7 @@ void CHGraph::analyzeVTables(const Module &M)
+                                                 SVFUtil::dyn_cast<Function>(aliasValue))
+                                     {
+                                         const SVFFunction* func = LLVMModuleSet::getLLVMModuleSet()->getSVFFunction(aliasFunc);
+-                                        addFuncToFuncVector(virtualFunctions, func);
++                                        virtualFunctions.push_back(func);
+                                     }
+                                     else if (const ConstantExpr *aliasconst =
+                                                  SVFUtil::dyn_cast<ConstantExpr>(aliasValue))
+@@ -559,7 +547,7 @@ void CHGraph::analyzeVTables(const Module &M)
+                                         assert(aliasbitcastfunc &&
+                                                "aliased bitcast in vtable not a function");
+                                         const SVFFunction* func = LLVMModuleSet::getLLVMModuleSet()->getSVFFunction(aliasbitcastfunc);
+-                                        addFuncToFuncVector(virtualFunctions, func);
++                                        virtualFunctions.push_back(func);
+                                     }
+                                     else
+                                     {
+@@ -721,20 +709,6 @@ const CHGraph::CHNodeSetTy& CHGraph::getCSClasses(CallSite cs)
+     }
+ }
+ 
+-static bool checkArgTypes(CallSite cs, const Function *fn) {
+-
+-    // here we skip the first argument (i.e., this pointer)
+-    for (unsigned i = 1; i < cs.arg_size(); i++) {
+-        auto cs_arg = cs.getArgOperand(i);
+-        auto fn_arg = fn->getArg(i);
+-        if (cs_arg->getType() != fn_arg->getType()) {
+-            return false;
+-        }
+-    }
+-
+-    return true;
+-}
+-
+ /*
+  * Get virtual functions for callsite "cs" based on vtbls (calculated
+  * based on pointsto set)
+@@ -760,12 +734,6 @@ void CHGraph::getVFnsFromVtbls(CallSite cs, const VTableSet &vtbls, VFunSet &vir
+             if (cs.arg_size() == callee->arg_size() ||
+                     (cs.getFunctionType()->isVarArg() && callee->isVarArg()))
+             {
+-
+-                // if argument types do not match
+-                // skip this one
+-                if (!checkArgTypes(cs, callee->getLLVMFun()))
+-                    continue;
+-
+                 DemangledName dname = demangle(callee->getName().str());
+                 string calleeName = dname.funcName;
+ 
+@@ -886,10 +854,6 @@ void CHGraph::dump(const std::string& filename)
+     printCH();
+ }
+ 
+-void CHGraph::view()
+-{
+-    llvm::ViewGraph(this, "Class Hierarchy Graph");
+-}
+ 
+ namespace llvm
+ {
+@@ -922,10 +886,10 @@ struct DOTGraphTraits<CHGraph*> : public DefaultDOTGraphTraits
+     {
+         if (node->isPureAbstract())
+         {
+-            return "shape=tab";
++            return "shape=Mcircle";
+         }
+         else
+-            return "shape=box";
++            return "shape=circle";
+     }
+ 
+     template<class EdgeIter>
+diff --git a/lib/SVF-FE/CPPUtil.cpp b/lib/SVF-FE/CPPUtil.cpp
+index ab92ddb7..9e8245b0 100644
+--- a/lib/SVF-FE/CPPUtil.cpp
++++ b/lib/SVF-FE/CPPUtil.cpp
+@@ -47,8 +47,7 @@ const string vtblLabelAfterDemangle = "vtable for ";
+ const string vfunPreLabel = "_Z";
+ 
+ // label for multi inheritance virtual function
+-const string NVThunkFunLabel = "non-virtual thunk to ";
+-const string VThunkFuncLabel = "virtual thunk to ";
++const string mInheritanceVFunLabel = "non-virtual thunk to ";
+ 
+ const string clsName = "class.";
+ const string structName = "struct.";
+@@ -83,7 +82,7 @@ static bool isOperOverload(const string name)
+     }
+ }
+ 
+-static string getBeforeParenthesis(const string &name)
++static string getBeforeParenthesis(const string name)
+ {
+     size_t lastRightParen = name.rfind(")");
+     assert(lastRightParen > 0);
+@@ -101,7 +100,7 @@ static string getBeforeParenthesis(const string &name)
+     return name.substr(0, pos);
+ }
+ 
+-string cppUtil::getBeforeBrackets(const string &name)
++string cppUtil::getBeforeBrackets(const string name)
+ {
+     if (name[name.size() - 1] != '>')
+     {
+@@ -132,31 +131,6 @@ bool cppUtil::isValVtbl(const Value *val)
+         return false;
+ }
+ 
+-static void handleThunkFunction(cppUtil::DemangledName &dname) {
+-    // when handling multi-inheritance,
+-    // the compiler may generate thunk functions
+-    // to perform `this` pointer adjustment
+-    // they are indicated with `virtual thunk to `
+-    // and `nun-virtual thunk to`.
+-    // if the classname starts with part of a
+-    // demangled name starts with
+-    // these prefixes, we need to remove the prefix
+-    // to get the real class name
+-
+-    static vector<string> thunkPrefixes = {VThunkFuncLabel, NVThunkFunLabel};
+-    for (unsigned i = 0; i < thunkPrefixes.size(); i++) {
+-        auto prefix = thunkPrefixes[i];
+-        if (dname.className.size() > prefix.size() &&
+-            dname.className.compare(0, prefix.size(), prefix) == 0)
+-        {
+-            dname.className = dname.className.substr(prefix.size());
+-            dname.isThunkFunc = true;
+-            return;
+-
+-        }
+-    }
+-}
+-
+ /*
+  * input: _ZN****
+  * after abi::__cxa_demangle:
+@@ -178,10 +152,9 @@ static void handleThunkFunction(cppUtil::DemangledName &dname) {
+  * functionName: f<...::...>
+  */
+ 
+-struct cppUtil::DemangledName cppUtil::demangle(const string &name)
++struct cppUtil::DemangledName cppUtil::demangle(const string name)
+ {
+     struct cppUtil::DemangledName dname;
+-    dname.isThunkFunc = false;
+ 
+     s32_t status;
+     char *realname = abi::__cxa_demangle(name.c_str(), 0, 0, &status);
+@@ -216,8 +189,13 @@ struct cppUtil::DemangledName cppUtil::demangle(const string &name)
+             }
+         }
+     }
+-
+-    handleThunkFunction(dname);
++    /// multiple inheritance
++    if (dname.className.size() > mInheritanceVFunLabel.size() &&
++            dname.className.compare(0, mInheritanceVFunLabel.size(),
++                                    mInheritanceVFunLabel) == 0)
++    {
++        dname.className = dname.className.substr(mInheritanceVFunLabel.size());
++    }
+ 
+     return dname;
+ }
+@@ -285,31 +263,6 @@ bool cppUtil::isVirtualCallSite(CallSite cs)
+     return false;
+ }
+ 
+-bool cppUtil::isCPPThunkFunction(const Function *F) {
+-    cppUtil::DemangledName dname = cppUtil::demangle(F->getName());
+-    return dname.isThunkFunc;
+-}
+-
+-const Function *cppUtil::getThunkTarget(const Function *F) {
+-    const Function *ret = nullptr;
+-
+-    for (auto &bb:*F) {
+-        for (auto &inst: bb) {
+-            if (llvm::isa<CallInst>(inst) || llvm::isa<InvokeInst>(inst)
+-                || llvm::isa<CallBrInst>(inst)) {
+-                llvm::ImmutableCallSite cs(&inst);
+-                assert(cs.getCalledFunction() &&
+-                       "Indirect call detected in thunk func");
+-                assert(ret == nullptr && "multiple callsites in thunk func");
+-
+-                ret = cs.getCalledFunction();
+-            }
+-        }
+-    }
+-
+-    return ret;
+-}
+-
+ const Value *cppUtil::getVCallThisPtr(CallSite cs)
+ {
+     if (cs.paramHasAttr(0, llvm::Attribute::StructRet))
+diff --git a/lib/SVF-FE/DCHG.cpp b/lib/SVF-FE/DCHG.cpp
+index 2e46508a..c2b19a50 100644
+--- a/lib/SVF-FE/DCHG.cpp
++++ b/lib/SVF-FE/DCHG.cpp
+@@ -9,7 +9,6 @@
+ 
+ #include <sstream>
+ 
+-#include "Util/Options.h"
+ #include "SVF-FE/DCHG.h"
+ #include "SVF-FE/CPPUtil.h"
+ #include "Util/SVFUtil.h"
+@@ -18,6 +17,7 @@
+ 
+ using namespace SVF;
+ 
++static llvm::cl::opt<bool> printDCHG("print-dchg", llvm::cl::init(false), llvm::cl::desc("print the DCHG if debug information is available"));
+ 
+ void DCHGraph::handleDIBasicType(const DIBasicType *basicType)
+ {
+@@ -529,7 +529,7 @@ void DCHGraph::buildCHG(bool extend)
+         }
+     }
+ 
+-    if (Options::PrintDCHG)
++    if (printDCHG)
+     {
+         print();
+     }
+diff --git a/lib/SVF-FE/LLVMModule.cpp b/lib/SVF-FE/LLVMModule.cpp
+index ecd09057..8903e2b3 100644
+--- a/lib/SVF-FE/LLVMModule.cpp
++++ b/lib/SVF-FE/LLVMModule.cpp
+@@ -27,7 +27,6 @@
+  *      Author: Xiaokang Fan
+  */
+ 
+-#include "Util/Options.h"
+ #include <queue>
+ #include "Util/SVFModule.h"
+ #include "Util/SVFUtil.h"
+@@ -54,6 +53,10 @@ using namespace SVF;
+ #define SVF_MAIN_FUNC_NAME           "svf.main"
+ #define SVF_GLOBAL_SUB_I_XXX          "_GLOBAL__sub_I_"
+ 
++static llvm::cl::opt<std::string> Graphtxt("graphtxt", llvm::cl::value_desc("filename"),
++        llvm::cl::desc("graph txt file to build PAG"));
++static llvm::cl::opt<bool> SVFMain("svfmain", llvm::cl::init(false), llvm::cl::desc("add svf.main()"));
++
+ LLVMModuleSet *LLVMModuleSet::llvmModuleSet = nullptr;
+ std::string SVFModule::pagReadFromTxt = "";
+ 
+@@ -72,7 +75,7 @@ SVFModule* LLVMModuleSet::buildSVFModule(const std::vector<std::string> &moduleN
+     assert(llvmModuleSet && "LLVM Module set needs to be created!");
+ 
+     // We read PAG from LLVM IR
+-    if(Options::Graphtxt.getValue().empty())
++    if(Graphtxt.getValue().empty())
+     {
+         if(moduleNameVec.empty())
+         {
+@@ -83,7 +86,7 @@ SVFModule* LLVMModuleSet::buildSVFModule(const std::vector<std::string> &moduleN
+     }
+     // We read PAG from a user-defined txt instead of parsing PAG from LLVM IR
+     else
+-        SVFModule::setPagFromTXT(Options::Graphtxt.getValue());
++        SVFModule::setPagFromTXT(Graphtxt.getValue());
+ 
+     if(!moduleNameVec.empty())
+         svfModule = new SVFModule(*moduleNameVec.begin());
+@@ -146,7 +149,7 @@ void LLVMModuleSet::loadModules(const std::vector<std::string> &moduleNameVec)
+ 
+ void LLVMModuleSet::initialize()
+ {
+-    if (Options::SVFMain)
++    if (SVFMain)
+         addSVFMain();
+ 
+     for (Module& mod : modules)
+diff --git a/lib/SVF-FE/SymbolTableInfo.cpp b/lib/SVF-FE/SymbolTableInfo.cpp
+index 8ed82e6e..7690698e 100644
+--- a/lib/SVF-FE/SymbolTableInfo.cpp
++++ b/lib/SVF-FE/SymbolTableInfo.cpp
+@@ -45,9 +45,16 @@ using namespace std;
+ using namespace SVF;
+ using namespace SVFUtil;
+ 
++
+ DataLayout* SymbolTableInfo::dl = nullptr;
+ SymbolTableInfo* SymbolTableInfo::symInfo = nullptr;
+ 
++static llvm::cl::opt<bool> LocMemModel("locMM", llvm::cl::init(false),
++                                       llvm::cl::desc("Bytes/bits modeling of memory locations"));
++
++static llvm::cl::opt<bool> modelConsts("modelConsts", llvm::cl::init(false),
++                                       llvm::cl::desc("Modeling individual constant objects"));
++
+ /*
+  * Initial the memory object here
+  */
+@@ -68,7 +75,7 @@ void MemObj::init(const Value *val)
+     if (refTy)
+     {
+         Type *objTy = refTy->getElementType();
+-        if(Options::LocMemModel)
++        if(LocMemModel)
+             typeInfo = new LocObjTypeInfo(val, objTy, Options::MaxFieldLimit);
+         else
+             typeInfo = new ObjTypeInfo(val, objTy, Options::MaxFieldLimit);
+@@ -90,11 +97,11 @@ SymbolTableInfo* SymbolTableInfo::SymbolInfo()
+ {
+     if (symInfo == nullptr)
+     {
+-        if(Options::LocMemModel)
++        if(LocMemModel)
+             symInfo = new LocSymTableInfo();
+         else
+             symInfo = new SymbolTableInfo();
+-        symInfo->setModelConstants(Options::ModelConsts);
++        symInfo->setModelConstants(modelConsts);
+     }
+     return symInfo;
+ }
+@@ -584,9 +591,6 @@ void SymbolTableInfo::buildMemModel(SVFModule* svfModule)
+     }
+ 
+     NodeIDAllocator::get()->endSymbolAllocation();
+-    if (Options::SymTabPrint) {
+-        SymbolTableInfo::SymbolInfo()->dump();
+-    }
+ }
+ 
+ /*!
+@@ -1001,94 +1005,6 @@ void SymbolTableInfo::printFlattenFields(const Type* type)
+     }
+ }
+ 
+-std::string SymbolTableInfo::toString(SYMTYPE symtype)
+-{
+-    switch (symtype) {
+-        case SYMTYPE::BlackHole: {
+-            return "BlackHole";
+-        }
+-        case SYMTYPE::ConstantObj: {
+-            return "ConstantObj";
+-        }
+-        case SYMTYPE::BlkPtr: {
+-            return "BlkPtr";
+-        }
+-        case SYMTYPE::NullPtr: {
+-            return "NullPtr";
+-        }
+-        case SYMTYPE::ValSym: {
+-            return "ValSym";
+-        }
+-        case SYMTYPE::ObjSym: {
+-            return "ObjSym";
+-        }
+-        case SYMTYPE::RetSym: {
+-            return "RetSym";
+-        }
+-        case SYMTYPE::VarargSym: {
+-            return "VarargSym";
+-        }
+-        default: {
+-            return "Invalid SYMTYPE";
+-        }
+-    }
+-}
+-
+-void SymbolTableInfo::dump()
+-{
+-    OrderedMap<SymID, Value*> idmap;
+-    SymID maxid = 0;
+-    for (ValueToIDMapTy::iterator iter = valSymMap.begin(); iter != valSymMap.end();
+-         ++iter)
+-    {
+-        const SymID i = iter->second;
+-        maxid = max(i, maxid);
+-        Value* val = (Value*) iter->first;
+-        idmap[i] = val;
+-    }
+-    for (ValueToIDMapTy::iterator iter = objSymMap.begin(); iter != objSymMap.end();
+-         ++iter)
+-    {
+-        const SymID i = iter->second;
+-        maxid = max(i, maxid);
+-        Value* val = (Value*) iter->first;
+-        idmap[i] = val;
+-    }
+-    for (FunToIDMapTy::iterator iter = returnSymMap.begin(); iter != returnSymMap.end();
+-         ++iter)
+-    {
+-        const SymID i = iter->second;
+-        maxid = max(i, maxid);
+-        Value* val = (Value*) iter->first;
+-        idmap[i] = val;
+-    }
+-    for (FunToIDMapTy::iterator iter = varargSymMap.begin(); iter != varargSymMap.end();
+-         ++iter)
+-    {
+-        const SymID i = iter->second;
+-        maxid = max(i, maxid);
+-        Value* val = (Value*) iter->first;
+-        idmap[i] = val;
+-    }
+-    outs() << "{SymbolTableInfo \n";
+-    for (SymID symid = 0; symid <= maxid; ++symid) {
+-        SYMTYPE symtype = this->symTyMap.at(symid);
+-        string typestring = toString(symtype);
+-        outs() << "  " << typestring << symid;
+-        if (symtype < SYMTYPE::ValSym) {
+-            outs() << "\n";
+-        } else {
+-            auto I = idmap.find(symid);
+-            if (I == idmap.end()) {
+-                outs() << "No value\n";
+-                break;
+-            }
+-            const Value* val = I->second;
+-            outs() << " -> " << value2String(val) << "\n";
+-        }
+-    }
+-    outs() << "}\n";
+-}
+ 
+ /*
+  * Get the type size given a target data layout
+diff --git a/lib/Util/Conditions.cpp b/lib/Util/Conditions.cpp
+index 7a39c00d..74defee6 100644
+--- a/lib/Util/Conditions.cpp
++++ b/lib/Util/Conditions.cpp
+@@ -28,12 +28,14 @@
+  *      Author: Yulei Sui
+  */
+ 
+-#include "Util/Options.h"
+ #include "Util/Conditions.h"
+ #include "Util/SVFUtil.h"
+ 
+ using namespace SVF;
+ 
++static llvm::cl::opt<unsigned> maxBddSize("maxbddsize",  llvm::cl::init(100000),
++        llvm::cl::desc("Maximum context limit for DDA"));
++
+ /// Operations on conditions.
+ //@{
+ /// use Cudd_bddAndLimit interface to avoid bdds blow up
+@@ -47,7 +49,7 @@ DdNode* BddCondManager::AND(DdNode* lhs, DdNode* rhs)
+         return lhs;
+     else
+     {
+-        DdNode* tmp = Cudd_bddAndLimit(m_bdd_mgr, lhs, rhs, Options::MaxBddSize);
++        DdNode* tmp = Cudd_bddAndLimit(m_bdd_mgr, lhs, rhs, maxBddSize);
+         if(tmp==nullptr)
+         {
+             SVFUtil::writeWrnMsg("exceeds max bdd size \n");
+@@ -75,7 +77,7 @@ DdNode* BddCondManager::OR(DdNode* lhs, DdNode* rhs)
+         return lhs;
+     else
+     {
+-        DdNode* tmp = Cudd_bddOrLimit(m_bdd_mgr, lhs, rhs, Options::MaxBddSize);
++        DdNode* tmp = Cudd_bddOrLimit(m_bdd_mgr, lhs, rhs, maxBddSize);
+         if(tmp==nullptr)
+         {
+             SVFUtil::writeWrnMsg("exceeds max bdd size \n");
+diff --git a/lib/Util/Options.cpp b/lib/Util/Options.cpp
+index 3fedb245..ac71de57 100644
+--- a/lib/Util/Options.cpp
++++ b/lib/Util/Options.cpp
+@@ -1,6 +1,7 @@
+ //===- Options.cpp -- Command line options ------------------------//
+ 
+ #include <llvm/Support/CommandLine.h>
++
+ #include "Util/Options.h"
+ 
+ namespace SVF
+@@ -8,7 +9,8 @@ namespace SVF
+     const llvm::cl::opt<bool> Options::MarkedClocksOnly(
+         "marked-clocks-only",
+         llvm::cl::init(false),
+-        llvm::cl::desc("Only measure times where explicitly marked"));
++        llvm::cl::desc("Only measure times where explicitly marked")
++    );
+ 
+     const llvm::cl::opt<NodeIDAllocator::Strategy> Options::NodeAllocStrat(
+         "node-alloc-strat",
+@@ -16,666 +18,16 @@ namespace SVF
+         llvm::cl::desc("Method of allocating (LLVM) values and memory objects as node IDs"),
+         llvm::cl::values(
+             clEnumValN(NodeIDAllocator::Strategy::DENSE, "dense", "allocate objects together and values together, separately (default)"),
+-            clEnumValN(NodeIDAllocator::Strategy::SEQ, "seq", "allocate values and objects sequentially, intermixed"),
+-            clEnumValN(NodeIDAllocator::Strategy::DEBUG, "debug", "allocate value and objects sequentially, intermixed, except GEP objects as offsets")));
+-
+-    const llvm::cl::opt<unsigned> Options::MaxFieldLimit(
+-        "field-limit",
+-        llvm::cl::init(512),
+-        llvm::cl::desc("Maximum number of fields for field sensitive analysis"));
+-
+-
+-    // ContextDDA.cpp
+-    const llvm::cl::opt<unsigned long long> Options::CxtBudget(
+-        "cxt-bg", 
+-        llvm::cl::init(10000),
+-        llvm::cl::desc("Maximum step budget of context-sensitive traversing")
+-    );
+-
+-
+-    // DDAClient.cpp
+-    const llvm::cl::opt<bool> Options::SingleLoad(
+-        "single-load", 
+-        llvm::cl::init(true),
+-        llvm::cl::desc("Count load pointer with same source operand as one query")
+-    );
+-
+-    const llvm::cl::opt<bool> Options::DumpFree(
+-        "dump-free", 
+-        llvm::cl::init(false),
+-        llvm::cl::desc("Dump use after free locations")
+-    );
+-
+-    const llvm::cl::opt<bool> Options::DumpUninitVar(
+-        "dump-uninit-var", 
+-        llvm::cl::init(false),
+-        llvm::cl::desc("Dump uninitialised variables")
+-    );
+-
+-    const llvm::cl::opt<bool> Options::DumpUninitPtr(
+-        "dump-uninit-ptr", 
+-        llvm::cl::init(false),
+-        llvm::cl::desc("Dump uninitialised pointers")
+-    );
+-
+-    const llvm::cl::opt<bool> Options::DumpSUPts(
+-        "dump-su-pts", 
+-        llvm::cl::init(false),
+-        llvm::cl::desc("Dump strong updates store")
+-    );
+-
+-    const llvm::cl::opt<bool> Options::DumpSUStore(
+-        "dump-su-store", 
+-        llvm::cl::init(false),
+-        llvm::cl::desc("Dump strong updates store")
+-    );
+-
+-    const llvm::cl::opt<bool> Options::MallocOnly(
+-        "malloc-only", 
+-        llvm::cl::init(true),
+-        llvm::cl::desc("Only add tainted objects for malloc")
+-    );
+-
+-    const llvm::cl::opt<bool> Options::TaintUninitHeap(
+-        "uninit-heap", 
+-        llvm::cl::init(true),
+-        llvm::cl::desc("detect uninitialized heap variables")
+-    );
+-
+-    const llvm::cl::opt<bool> Options::TaintUninitStack(
+-        "uninit-stack", 
+-        llvm::cl::init(true),
+-        llvm::cl::desc("detect uninitialized stack variables")
+-    );
+-
+-    // DDAPass.cpp
+-    const llvm::cl::opt<unsigned> Options::MaxPathLen(
+-        "max-path",  
+-        llvm::cl::init(100000),
+-        llvm::cl::desc("Maximum path limit for DDA")
+-    );
+-
+-    const llvm::cl::opt<unsigned> Options::MaxContextLen(
+-        "max-cxt",  
+-        llvm::cl::init(3),
+-        llvm::cl::desc("Maximum context limit for DDA")
+-    );
+-
+-    const llvm::cl::opt<std::string> Options::UserInputQuery(
+-        "query",  
+-        llvm::cl::init("all"),
+-        llvm::cl::desc("Please specify queries by inputing their pointer ids")
+-    );
+-
+-    const llvm::cl::opt<bool> Options::InsenRecur(
+-        "in-recur", 
+-        llvm::cl::init(false),
+-        llvm::cl::desc("Mark context insensitive SVFG edges due to function recursions")
+-    );
+-
+-    const llvm::cl::opt<bool> Options::InsenCycle(
+-        "in-cycle", 
+-        llvm::cl::init(false),
+-        llvm::cl::desc("Mark context insensitive SVFG edges due to value-flow cycles")
+-    );
+-
+-    const llvm::cl::opt<bool> Options::PrintCPts(
+-        "cpts", 
+-        llvm::cl::init(false),
+-        llvm::cl::desc("Dump conditional points-to set ")
+-    );
+-
+-    const llvm::cl::opt<bool> Options::PrintQueryPts(
+-        "print-query-pts",
+-        llvm::cl::init(false),
+-        llvm::cl::desc("Dump queries' conditional points-to set ")
+-    );
+-
+-    const llvm::cl::opt<bool> Options::WPANum(
+-        "wpa-num", 
+-        llvm::cl::init(false),
+-        llvm::cl::desc("collect WPA FS number only ")
+-    );
+-
+-    /// register this into alias analysis group
+-    //static RegisterAnalysisGroup<AliasAnalysis> AA_GROUP(DDAPA);
+-    llvm::cl::bits<PointerAnalysis::PTATY> Options::DDASelected(
+-        llvm::cl::desc("Select pointer analysis"),
+-        llvm::cl::values(
+-            clEnumValN(PointerAnalysis::FlowS_DDA, "dfs", "Demand-driven flow sensitive analysis"),
+-            clEnumValN(PointerAnalysis::Cxt_DDA, "cxt", "Demand-driven context- flow- sensitive analysis")
+-    ));
+-
+-    // FlowDDA.cpp
+-    const llvm::cl::opt<unsigned long long> Options::FlowBudget(
+-        "flow-bg",  
+-        llvm::cl::init(10000),
+-        llvm::cl::desc("Maximum step budget of flow-sensitive traversing")
+-    );
+-
+-
+-    // Offline constraint graph (OfflineConsG.cpp)
+-    const llvm::cl::opt<bool> Options::OCGDotGraph(
+-        "dump-ocg", 
+-        llvm::cl::init(false),
+-        llvm::cl::desc("Dump dot graph of Offline Constraint Graph")
+-    );
+-
+-    
+-    // Program Assignment Graph for pointer analysis (PAG.cpp)
+-    llvm::cl::opt<bool> Options::HandBlackHole(
+-        "blk", 
+-        llvm::cl::init(false),
+-        llvm::cl::desc("Hanle blackhole edge")
++            clEnumValN(NodeIDAllocator::Strategy::SEQ,     "seq", "allocate values and objects sequentially, intermixed"),
++            clEnumValN(NodeIDAllocator::Strategy::DEBUG, "debug", "allocate value and objects sequentially, intermixed, except GEP objects as offsets")
++        )
+     );
+ 
+-    const llvm::cl::opt<bool> Options::FirstFieldEqBase(
+-        "ff-eq-base", 
+-        llvm::cl::init(true),
+-        llvm::cl::desc("Treat base objects as their first fields")
+-    );
+-
+-
+-    // SVFG optimizer (SVFGOPT.cpp)
+-    const llvm::cl::opt<bool> Options::ContextInsensitive(
+-        "ci-svfg", 
+-        llvm::cl::init(false),
+-        llvm::cl::desc("Reduce SVFG into a context-insensitive one")
+-    );
+-
+-    const llvm::cl::opt<bool> Options::KeepAOFI(
+-        "keep-aofi", 
+-        llvm::cl::init(false),
+-        llvm::cl::desc("Keep formal-in and actual-out parameters")
+-    );
+-
+-    const llvm::cl::opt<std::string> Options::SelfCycle(
+-        "keep-self-cycle", 
+-        llvm::cl::value_desc("keep self cycle"),
+-        llvm::cl::desc("How to handle self cycle edges: all, context, none")
+-    );
+-
+-
+-    // Sparse value-flow graph (VFG.cpp)
+-    const llvm::cl::opt<bool> Options::DumpVFG(
+-        "dump-vfg",
+-        llvm::cl::init(false),
+-        llvm::cl::desc("Dump dot graph of VFG")
+-    );
+-
+-
+-    // Location set for modeling abstract memory object (LocationSet.cpp)
+-    const llvm::cl::opt<bool> Options::SingleStride(
+-        "stride-only", 
+-        llvm::cl::init(false),
+-        llvm::cl::desc("Only use single stride in LocMemoryModel")
+-    );
+-
+-    
+-    // Base class of pointer analyses (PointerAnalysis.cpp)
+-    const llvm::cl::opt<bool> Options::TypePrint(
+-        "print-type", 
+-        llvm::cl::init(false),
+-        llvm::cl::desc("Print type")
+-    );
+-
+-    const llvm::cl::opt<bool> Options::FuncPointerPrint(
+-        "print-fp", 
+-        llvm::cl::init(false),
+-        llvm::cl::desc("Print targets of indirect call site")
+-    );
+-
+-    const llvm::cl::opt<bool> Options::PTSPrint(
+-        "print-pts", 
+-        llvm::cl::init(false),
+-        llvm::cl::desc("Print points-to set of top-level pointers")
+-    );
+-
+-    const llvm::cl::opt<bool> Options::PTSAllPrint(
+-        "print-all-pts", 
+-        llvm::cl::init(false),
+-        llvm::cl::desc("Print all points-to set of both top-level and address-taken variables")
+-    );
+-
+-    const llvm::cl::opt<bool> Options::PStat(
+-        "stat", 
+-        llvm::cl::init(true),
+-        llvm::cl::desc("Statistic for Pointer analysis")
+-    );
+ 
+-    const llvm::cl::opt<unsigned> Options::StatBudget(
+-        "stat-limit", 
+-        llvm::cl::init(20),
+-        llvm::cl::desc("Iteration budget for On-the-fly statistics")
+-    );
+-
+-    const llvm::cl::opt<bool> Options::PAGDotGraph(
+-        "dump-pag", 
+-        llvm::cl::init(false),
+-        llvm::cl::desc("Dump dot graph of PAG")
+-    );
+-
+-    const llvm::cl::opt<bool> Options::PAGDotGraphShorter(
+-            "dump-pag-shorter",
+-            llvm::cl::init(true),
+-            llvm::cl::desc("If dumping dot graph of PAG, use shorter lines")
+-    );
+-
+-    const llvm::cl::opt<bool> Options::DumpICFG(
+-        "dump-icfg", 
+-        llvm::cl::init(false),
+-        llvm::cl::desc("Dump dot graph of ICFG")
+-    );
+-
+-    const llvm::cl::opt<bool> Options::CallGraphDotGraph(
+-        "dump-callgraph", 
+-        llvm::cl::init(false),
+-        llvm::cl::desc("Dump dot graph of Call Graph")
+-    );
+-
+-    const llvm::cl::opt<bool> Options::PAGPrint(
+-        "print-pag", 
+-        llvm::cl::init(false),
+-        llvm::cl::desc("Print PAG to command line")
+-    );
+-
+-    const llvm::cl::opt<unsigned> Options::IndirectCallLimit(
+-        "ind-call-limit",  
+-        llvm::cl::init(50000),
+-        llvm::cl::desc("Indirect solved call edge limit")
+-    );
+-
+-    const llvm::cl::opt<bool> Options::UsePreCompFieldSensitive(
+-        "pre-field-sensitive", 
+-        llvm::cl::init(true),
+-        llvm::cl::desc("Use pre-computed field-sensitivity for later analysis")
+-    );
+-
+-    const llvm::cl::opt<bool> Options::EnableAliasCheck(
+-        "alias-check", 
+-        llvm::cl::init(true),
+-        llvm::cl::desc("Enable alias check functions")
+-    );
+-
+-    const llvm::cl::opt<bool> Options::EnableThreadCallGraph(
+-        "enable-tcg", 
+-        llvm::cl::init(true),
+-        llvm::cl::desc("Enable pointer analysis to use thread call graph")
+-    );
+-
+-    const llvm::cl::opt<bool> Options::ConnectVCallOnCHA(
+-        "v-call-cha", 
+-        llvm::cl::init(false),
+-        llvm::cl::desc("connect virtual calls using cha")
+-    );
+-    
+-
+-    // PointerAnalysisImpl.cpp
+-    const llvm::cl::opt<bool> Options::INCDFPTData(
+-        "inc-data", 
+-        llvm::cl::init(true),
+-        llvm::cl::desc("Enable incremental DFPTData for flow-sensitive analysis")
+-    );
+-
+-    
+-    // Memory region (MemRegion.cpp)
+-    const llvm::cl::opt<bool> Options::IgnoreDeadFun(
+-        "mssa-ignore-dead-fun", 
+-        llvm::cl::init(false),
+-        llvm::cl::desc("Don't construct memory SSA for deadfunction")
+-    );
+-
+-    
+-    // Base class of pointer analyses (MemSSA.cpp)
+-    const llvm::cl::opt<bool> Options::DumpMSSA(
+-        "dump-mssa", 
+-        llvm::cl::init(false),
+-        llvm::cl::desc("Dump memory SSA")
+-    );
+-
+-    const llvm::cl::opt<std::string> Options::MSSAFun(
+-        "mssa-fun",  
+-        llvm::cl::init(""),
+-        llvm::cl::desc("Please specify which function needs to be dumped")
+-    );
+-
+-    const llvm::cl::opt<std::string> Options::MemPar(
+-        "mem-par", 
+-        llvm::cl::value_desc("memory-partition-type"),
+-        llvm::cl::desc("memory partition strategy")
+-    );
+-
+-
+-    // SVFG builder (SVFGBuilder.cpp)
+-    const llvm::cl::opt<bool> Options::SVFGWithIndirectCall(
+-        "svfg-with-ind-call", 
+-        llvm::cl::init(false),
+-        llvm::cl::desc("Update Indirect Calls for SVFG using pre-analysis")
+-    );
+-
+-    const llvm::cl::opt<bool> Options::SingleVFG(
+-        "single-vfg", 
+-        llvm::cl::init(false),
+-        llvm::cl::desc("Create a single VFG shared by multiple analysis")
+-    );
+-
+-    llvm::cl::opt<bool> Options::OPTSVFG(
+-        "opt-svfg", 
+-        llvm::cl::init(true),
+-        llvm::cl::desc("unoptimized SVFG with formal-in and actual-out")
+-    );
+-
+-    
+-    // FSMPTA.cpp
+-    const llvm::cl::opt<bool> Options::UsePCG(
+-        "pcg-td-edge", 
+-        llvm::cl::init(false),
+-        llvm::cl::desc("Use PCG lock for non-sparsely adding SVFG edges")
+-    );
+-
+-    const llvm::cl::opt<bool> Options::IntraLock(
+-        "intra-lock-td-edge", 
+-        llvm::cl::init(true), 
+-        llvm::cl::desc("Use simple intra-procedual lock for adding SVFG edges")
+-    );
+-
+-    const llvm::cl::opt<bool> Options::ReadPrecisionTDEdge(
+-        "rp-td-edge", 
+-        llvm::cl::init(false), 
+-        llvm::cl::desc("perform read precision to refine SVFG edges")
+-    );
+-
+-    const llvm::cl::opt<u32_t> Options::AddModelFlag(
+-        "add-td-edge", 
+-        llvm::cl::init(0), 
+-        llvm::cl::desc("Add thread SVFG edges with models: 0 Non Add Edge; 1 NonSparse; 2 All Optimisation; 3 No MHP; 4 No Alias; 5 No Lock; 6 No Read Precision.")
+-    );
+-
+-
+-    // LockAnalysis.cpp
+-    const llvm::cl::opt<bool> Options::PrintLockSpan(
+-        "print-lock", 
+-        llvm::cl::init(false), 
+-        llvm::cl::desc("Print Thread Interleaving Results")
+-    );
+-
+-
+-    // MHP.cpp
+-    const llvm::cl::opt<bool> Options::PrintInterLev(
+-        "print-interlev", 
+-        llvm::cl::init(false),
+-        llvm::cl::desc("Print Thread Interleaving Results")
+-    );
+-    
+-    const llvm::cl::opt<bool> Options::DoLockAnalysis(
+-        "lock-analysis", 
+-        llvm::cl::init(true),
+-        llvm::cl::desc("Run Lock Analysis")
+-    );
+-
+-
+-    // MTA.cpp
+-    const llvm::cl::opt<bool> Options::AndersenAnno(
+-        "tsan-ander", 
+-        llvm::cl::init(false), 
+-        llvm::cl::desc("Add TSan annotation according to Andersen")
+-    );
+-
+-    const llvm::cl::opt<bool> Options::FSAnno(
+-        "tsan-fs", 
+-        llvm::cl::init(false), 
+-        llvm::cl::desc("Add TSan annotation according to flow-sensitive analysis")
+-    );
+-
+-
+-    // MTAAnnotator.cpp
+-    const llvm::cl::opt<u32_t> Options::AnnoFlag(
+-        "anno", 
+-        llvm::cl::init(0), 
+-        llvm::cl::desc("prune annotated instructions: 0001 Thread Local; 0002 Alias; 0004 MHP.")
+-    );
+-
+-    
+-    // MTAResultValidator.cpp
+-    const llvm::cl::opt<bool> Options::PrintValidRes(
+-        "print-mhp-validation", 
+-        llvm::cl::init(false), 
+-        llvm::cl::desc("Print MHP Validation Results")
+-    );
+-
+-
+-    // MTAStat.cpp
+-    const llvm::cl::opt<bool> Options::AllPairMHP(
+-        "all-pair-mhp", 
+-        llvm::cl::init(false), 
+-        llvm::cl::desc("All pair MHP computation")
+-    );
+-
+-
+-    // PCG.cpp
+-    //const llvm::cl::opt<bool> TDPrint(
+-        // "print-td",
+-        // llvm::cl::init(true), 
+-        // llvm::cl::desc("Print Thread Analysis Results"));
+-
+-
+-    // TCT.cpp
+-    const llvm::cl::opt<bool> Options::TCTDotGraph(
+-        "dump-tct", 
+-        llvm::cl::init(false), 
+-        llvm::cl::desc("Dump dot graph of Call Graph")
+-    );
+-
+-    
+-    // LeakChecker.cpp
+-    const llvm::cl::opt<bool> Options::ValidateTests(
+-        "valid-tests", 
+-        llvm::cl::init(false),
+-        llvm::cl::desc("Validate memory leak tests")
+-    );
+-
+-
+-    // Source-sink analyzer (SrcSnkDDA.cpp)
+-    const llvm::cl::opt<bool> Options::DumpSlice(
+-        "dump-slice", 
+-        llvm::cl::init(false),
+-        llvm::cl::desc("Dump dot graph of Saber Slices")
+-    );
+-
+-    const llvm::cl::opt<unsigned> Options::CxtLimit(
+-        "cxt-limit",  
+-        llvm::cl::init(3),
+-        llvm::cl::desc("Source-Sink Analysis Contexts Limit")
+-    );
+-
+-    
+-    // CHG.cpp
+-    const llvm::cl::opt<bool> Options::DumpCHA(
+-        "dump-cha", 
+-        llvm::cl::init(false), 
+-        llvm::cl::desc("dump the class hierarchy graph")
+-    );
+-
+-
+-    // DCHG.cpp
+-    const llvm::cl::opt<bool> Options::PrintDCHG(
+-        "print-dchg", 
+-        llvm::cl::init(false), 
+-        llvm::cl::desc("print the DCHG if debug information is available")
+-    );
+-
+-
+-    // LLVMModule.cpp
+-    const llvm::cl::opt<std::string> Options::Graphtxt(
+-        "graph-txt", 
+-        llvm::cl::value_desc("filename"),
+-        llvm::cl::desc("graph txt file to build PAG")
+-    );
+-
+-    const llvm::cl::opt<bool> Options::SVFMain(
+-        "svf-main", 
+-        llvm::cl::init(false),
+-        llvm::cl::desc("add svf.main()")
+-    );
+-
+-    
+-    // SymbolTableInfo.cpp
+-    const llvm::cl::opt<bool> Options::LocMemModel(
+-        "loc-mm", 
+-        llvm::cl::init(false),
+-        llvm::cl::desc("Bytes/bits modeling of memory locations")
+-    );
+-
+-    const llvm::cl::opt<bool> Options::ModelConsts(
+-        "model-consts", 
+-        llvm::cl::init(false),
+-        llvm::cl::desc("Modeling individual constant objects")
+-    );
+-
+-    const llvm::cl::opt<bool> Options::SymTabPrint(
+-            "print-symbol-table", llvm::cl::init(false),
+-            llvm::cl::desc("Print Symbol Table to command line")
+-    );
+-
+-
+-    // Conditions.cpp
+-    const llvm::cl::opt<unsigned> Options::MaxBddSize(
+-        "max-bdd-size",  
+-        llvm::cl::init(100000),
+-        llvm::cl::desc("Maximum context limit for DDA")
+-    );
+-
+-    
+-    // PathCondAllocator.cpp
+-    const llvm::cl::opt<bool> Options::PrintPathCond(
+-        "print-pc", 
+-        llvm::cl::init(false),
+-        llvm::cl::desc("Print out path condition")
+-    );
+-
+-
+-    // SVFUtil.cpp
+-    const llvm::cl::opt<bool> Options::DisableWarn(
+-        "dwarn", 
+-        llvm::cl::init(true),
+-        llvm::cl::desc("Disable warning")
+-    );
+-
+-    
+-    // Andersen.cpp
+-    const llvm::cl::opt<bool> Options::ConsCGDotGraph(
+-        "dump-constraint-graph", 
+-        llvm::cl::init(false),
+-        llvm::cl::desc("Dump dot graph of Constraint Graph")
+-    );
+-
+-    const llvm::cl::opt<bool> Options::BriefConsCGDotGraph(
+-            "brief-constraint-graph",
+-            llvm::cl::init(true),
+-            llvm::cl::desc("Dump dot graph of Constraint Graph")
+-    );
+-
+-    const llvm::cl::opt<bool> Options::PrintCGGraph(
+-        "print-constraint-graph", 
+-        llvm::cl::init(false),
+-        llvm::cl::desc("Print Constraint Graph to Terminal")
+-    );
+-
+-    const llvm::cl::opt<std::string> Options::WriteAnder(
+-        "write-ander",  
+-        llvm::cl::init(""),
+-        llvm::cl::desc("Write Andersen's analysis results to a file")
+-    );
+-
+-    const llvm::cl::opt<std::string> Options::ReadAnder(
+-        "read-ander",  
+-        llvm::cl::init(""),
+-        llvm::cl::desc("Read Andersen's analysis results from a file")
+-    );
+-
+-    const llvm::cl::opt<bool> Options::PtsDiff(
+-        "diff",  
+-        llvm::cl::init(true),
+-        llvm::cl::desc("Disable diff pts propagation")
+-    );
+-
+-    const llvm::cl::opt<bool> Options::MergePWC(
+-        "merge-pwc",  
+-        llvm::cl::init(true),
+-        llvm::cl::desc("Enable PWC in graph solving")
+-    );
+-
+-    
+-    // FlowSensitive.cpp
+-    const llvm::cl::opt<bool> Options::CTirAliasEval(
+-        "ctir-alias-eval", 
+-        llvm::cl::init(false), 
+-        llvm::cl::desc("Prints alias evaluation of ctir instructions in FS analyses")
+-    );
+-
+-    
+-    // FlowSensitiveTBHC.cpp
+-    /// Whether we allow reuse for TBHC.
+-    const llvm::cl::opt<bool> Options::TBHCStoreReuse(
+-        "tbhc-store-reuse", 
+-        llvm::cl::init(false), 
+-        llvm::cl::desc("Allow for object reuse in at stores in FSTBHC")
+-    );
+-
+-    const llvm::cl::opt<bool> Options::TBHCAllReuse(
+-        "tbhc-all-reuse", 
+-        llvm::cl::init(false), 
+-        llvm::cl::desc("Allow for object reuse everywhere in FSTBHC")
+-    );
+-
+-    
+-    // TypeAnalysis.cpp
+-    const llvm::cl::opt<bool> Options::GenICFG(
+-        "gen-icfg", 
+-        llvm::cl::init(true), 
+-        llvm::cl::desc("Generate ICFG graph")
+-    );
+-
+-
+-    //WPAPass.cpp
+-    const llvm::cl::opt<bool> Options::AnderSVFG(
+-        "svfg", 
+-        llvm::cl::init(false),
+-        llvm::cl::desc("Generate SVFG after Andersen's Analysis")
+-    );
+-
+-    const llvm::cl::opt<bool> Options::PrintAliases(
+-        "print-aliases", 
+-        llvm::cl::init(false),
+-        llvm::cl::desc("Print results for all pair aliases")
++    const llvm::cl::opt<unsigned> Options::MaxFieldLimit(
++        "fieldlimit",
++        llvm::cl::init(512),
++        llvm::cl::desc("Maximum number of fields for field sensitive analysis")
+     );
+ 
+-    llvm::cl::bits<PointerAnalysis::PTATY> Options::PASelected(
+-        llvm::cl::desc("Select pointer analysis"),
+-        llvm::cl::values(
+-            clEnumValN(PointerAnalysis::Andersen_WPA, "nander", "Standard inclusion-based analysis"),
+-            clEnumValN(PointerAnalysis::AndersenLCD_WPA, "lander", "Lazy cycle detection inclusion-based analysis"),
+-            clEnumValN(PointerAnalysis::AndersenHCD_WPA, "hander", "Hybrid cycle detection inclusion-based analysis"),
+-            clEnumValN(PointerAnalysis::AndersenHLCD_WPA, "hlander", "Hybrid lazy cycle detection inclusion-based analysis"),
+-            clEnumValN(PointerAnalysis::AndersenSCD_WPA, "sander", "Selective cycle detection inclusion-based analysis"),
+-            clEnumValN(PointerAnalysis::AndersenSFR_WPA, "sfrander", "Stride-based field representation includion-based analysis"),
+-            clEnumValN(PointerAnalysis::AndersenWaveDiff_WPA, "wander", "Wave propagation inclusion-based analysis"),
+-            clEnumValN(PointerAnalysis::AndersenWaveDiff_WPA, "ander", "Diff wave propagation inclusion-based analysis"),
+-            clEnumValN(PointerAnalysis::Steensgaard_WPA, "steens", "Steensgaard's pointer analysis"),
+-            // Disabled till further work is done.
+-            // clEnumValN(PointerAnalysis::AndersenWaveDiffWithType_WPA, "andertype", "Diff wave propagation with type inclusion-based analysis"),
+-            clEnumValN(PointerAnalysis::FSSPARSE_WPA, "fspta", "Sparse flow sensitive pointer analysis"),
+-            clEnumValN(PointerAnalysis::FSTBHC_WPA, "fstbhc", "Sparse flow-sensitive type-based heap cloning pointer analysis"),
+-            clEnumValN(PointerAnalysis::VFS_WPA, "vfspta", "Versioned sparse flow-sensitive points-to analysis"),
+-            clEnumValN(PointerAnalysis::TypeCPP_WPA, "type", "Type-based fast analysis for Callgraph, PAG and CHA")
+-        ));
+-
+-
+-    llvm::cl::bits<WPAPass::AliasCheckRule> Options::AliasRule(llvm::cl::desc("Select alias check rule"),
+-        llvm::cl::values(
+-            clEnumValN(WPAPass::Conservative, "conservative", "return MayAlias if any pta says alias"),
+-            clEnumValN(WPAPass::Veto, "veto", "return NoAlias if any pta says no alias")
+-        ));
+-
+-    
+-}; // namespace SVF.
++};  // namespace SVF.
+diff --git a/lib/Util/PathCondAllocator.cpp b/lib/Util/PathCondAllocator.cpp
+index 00ece432..08739c7a 100644
+--- a/lib/Util/PathCondAllocator.cpp
++++ b/lib/Util/PathCondAllocator.cpp
+@@ -28,7 +28,7 @@
+  *      Author: Yulei Sui
+  */
+ 
+-#include "Util/Options.h"
++
+ #include "SVF-FE/LLVMUtil.h"
+ #include "Util/PathCondAllocator.h"
+ #include "Util/DPItem.h"
+@@ -45,6 +45,8 @@ u32_t VFPathCond::maximumPath = 0;
+ 
+ u32_t PathCondAllocator::totalCondNum = 0;
+ BddCondManager* PathCondAllocator::bddCondMgr = nullptr;
++static llvm::cl::opt<bool> PrintPathCond("print-pc", llvm::cl::init(false),
++        llvm::cl::desc("Print out path condition"));
+ 
+ /*!
+  * Allocate path condition for each branch
+@@ -68,7 +70,7 @@ void PathCondAllocator::allocate(const SVFModule* M)
+         }
+     }
+ 
+-    if(Options::PrintPathCond)
++    if(PrintPathCond)
+         printPathCond();
+ 
+     DBOUT(DGENERAL,outs() << pasMsg("path condition allocation ends\n"));
+diff --git a/lib/Util/SVFUtil.cpp b/lib/Util/SVFUtil.cpp
+index f719b5be..5a0bc460 100644
+--- a/lib/Util/SVFUtil.cpp
++++ b/lib/Util/SVFUtil.cpp
+@@ -27,7 +27,6 @@
+  *      Author: Yulei Sui
+  */
+ 
+-#include "Util/Options.h"
+ #include "Util/SVFUtil.h"
+ #include "SVF-FE/LLVMUtil.h"
+ 
+@@ -46,6 +45,8 @@ using namespace SVF;
+ #define KCYA  "\x1B[1;36m"
+ #define KWHT  "\x1B[1;37m"
+ 
++static llvm::cl::opt<bool> DisableWarn("dwarn", llvm::cl::init(true),
++                                       llvm::cl::desc("Disable warning"));
+ 
+ 
+ /*!
+@@ -66,7 +67,7 @@ std::string SVFUtil::wrnMsg(std::string msg)
+ 
+ void SVFUtil::writeWrnMsg(std::string msg)
+ {
+-    if(Options::DisableWarn) return;
++    if(DisableWarn) return;
+     outs() << wrnMsg(msg) << "\n";
+ }
+ 
+@@ -266,14 +267,6 @@ std::string SVFUtil::getSourceLoc(const Value* val)
+             unsigned Column = Loc->getColumn();
+             StringRef File = Loc->getFilename();
+             //StringRef Dir = Loc.getDirectory();
+-            if(File.str().empty() || Line == 0) {
+-                auto inlineLoc = Loc->getInlinedAt();
+-                if(inlineLoc) {
+-                    Line = inlineLoc->getLine();
+-                    Column = inlineLoc->getColumn();
+-                    File = inlineLoc->getFilename();
+-                }   
+-            }
+             rawstr << "ln: " << Line << "  cl: " << Column << "  fl: " << File;
+         }
+     }
+@@ -316,48 +309,11 @@ std::string SVFUtil::getSourceLoc(const Value* val)
+     {
+         rawstr << getSourceLocOfFunction(func);
+     }
+-    else if (const BasicBlock* bb = SVFUtil::dyn_cast<BasicBlock>(val))
+-    {
+-        rawstr << "basic block: " << bb->getName() << " " << getSourceLoc(bb->getFirstNonPHI());
+-    }
+-    else if(SVFUtil::isConstantData(val))
+-    {
+-        rawstr << "constant data";
+-    }
+     else
+     {
+-        rawstr << "Can only get source location for instruction, argument, global var, function or constant data.";
++        rawstr << "Can only get source location for instruction, argument, global var or function.";
+     }
+     rawstr << " }";
+ 
+     return rawstr.str();
+ }
+-
+-
+-/*!
+- * return string of an LLVM Value
+- */
+-const std::string SVFUtil::value2String(const Value* value) {
+-    std::string str;
+-    raw_string_ostream rawstr(str);
+-    if(value){
+-        if(const SVF::Function* fun = SVFUtil::dyn_cast<Function>(value))
+-            rawstr << " " << fun->getName() << " ";
+-        else
+-            rawstr << " " << *value << " ";
+-        rawstr << getSourceLoc(value);
+-    }
+-    return rawstr.str();
+-}
+-
+-void SVFFunction::viewCFG() {
+-    if (fun != nullptr) {
+-        fun->viewCFG();
+-    }
+-}
+-
+-void SVFFunction::viewCFGOnly() {
+-    if (fun != nullptr) {
+-        fun->viewCFGOnly();
+-    }
+-}
+diff --git a/lib/WPA/Andersen.cpp b/lib/WPA/Andersen.cpp
+index 76e750a6..07467467 100644
+--- a/lib/WPA/Andersen.cpp
++++ b/lib/WPA/Andersen.cpp
+@@ -27,7 +27,6 @@
+  *      Author: Yulei Sui
+  */
+ 
+-#include "Util/Options.h"
+ #include "SVF-FE/LLVMUtil.h"
+ #include "WPA/Andersen.h"
+ 
+@@ -55,6 +54,21 @@ double AndersenBase::timeOfProcessLoadStore = 0;
+ double AndersenBase::timeOfUpdateCallGraph = 0;
+ 
+ 
++static llvm::cl::opt<bool> ConsCGDotGraph("dump-consG", llvm::cl::init(false),
++        llvm::cl::desc("Dump dot graph of Constraint Graph"));
++static llvm::cl::opt<bool> PrintCGGraph("print-consG", llvm::cl::init(false),
++                                        llvm::cl::desc("Print Constraint Graph to Terminal"));
++
++static llvm::cl::opt<string> WriteAnder("write-ander",  llvm::cl::init(""),
++                                        llvm::cl::desc("Write Andersen's analysis results to a file"));
++static llvm::cl::opt<string> ReadAnder("read-ander",  llvm::cl::init(""),
++                                       llvm::cl::desc("Read Andersen's analysis results from a file"));
++static llvm::cl::opt<bool> PtsDiff("diff",  llvm::cl::init(true),
++                                   llvm::cl::desc("Disable diff pts propagation"));
++static llvm::cl::opt<bool> MergePWC("merge-pwc",  llvm::cl::init(true),
++                                    llvm::cl::desc("Enable PWC in graph solving"));
++
++
+ /*!
+  * Initilize analysis
+  */
+@@ -67,7 +81,7 @@ void AndersenBase::initialize()
+     setGraph(consCG);
+     /// Create statistic class
+     stat = new AndersenStat(this);
+-	if (Options::ConsCGDotGraph)
++	if (ConsCGDotGraph)
+ 		consCG->dump("consCG_initial");
+ }
+ 
+@@ -77,10 +91,10 @@ void AndersenBase::initialize()
+ void AndersenBase::finalize()
+ {
+     /// dump constraint graph if PAGDotGraph flag is enabled
+-	if (Options::ConsCGDotGraph)
++	if (ConsCGDotGraph)
+ 		consCG->dump("consCG_final");
+ 
+-	if (Options::PrintCGGraph)
++	if (PrintCGGraph)
+ 		consCG->print();
+     BVDataPTAImpl::finalize();
+ }
+@@ -95,8 +109,8 @@ void AndersenBase::analyze()
+     initialize();
+ 
+     bool readResultsFromFile = false;
+-    if(!Options::ReadAnder.empty())
+-        readResultsFromFile = this->readFromFile(Options::ReadAnder);
++    if(!ReadAnder.empty())
++        readResultsFromFile = this->readFromFile(ReadAnder);
+ 
+     if(!readResultsFromFile)
+     {
+@@ -126,8 +140,8 @@ void AndersenBase::analyze()
+         finalize();
+     }
+ 
+-    if (!Options::WriteAnder.empty())
+-        this->writeToFile(Options::WriteAnder);
++    if (!WriteAnder.empty())
++        this->writeToFile(WriteAnder);
+ }
+ 
+ 
+@@ -137,8 +151,8 @@ void AndersenBase::analyze()
+ void Andersen::initialize()
+ {
+     resetData();
+-    setDiffOpt(Options::PtsDiff);
+-    setPWCOpt(Options::MergePWC);
++    setDiffOpt(PtsDiff);
++    setPWCOpt(MergePWC);
+     AndersenBase::initialize();
+     /// Initialize worklist
+     processAllAddr();
+@@ -505,13 +519,14 @@ bool Andersen::collapseField(NodeID nodeId)
+         if (fieldId != baseId)
+         {
+             // use the reverse pts of this field node to find all pointers point to it
+-            const NodeBS &revPts = getRevPts(fieldId);
+-            for (const NodeID o : revPts)
++            const NodeSet &revPts = getRevPts(fieldId);
++            for (NodeSet::const_iterator ptdIt = revPts.begin(), ptdEit = revPts.end();
++                    ptdIt != ptdEit; ptdIt++)
+             {
+                 // change the points-to target from field to base node
+-                clearPts(o, fieldId);
+-                addPts(o, baseId);
+-                pushIntoWorklist(o);
++                clearPts(*ptdIt, fieldId);
++                addPts(*ptdIt, baseId);
++                pushIntoWorklist(*ptdIt);
+ 
+                 changed = true;
+             }
+diff --git a/lib/WPA/FlowSensitive.cpp b/lib/WPA/FlowSensitive.cpp
+index e71471f9..c59f96ff 100644
+--- a/lib/WPA/FlowSensitive.cpp
++++ b/lib/WPA/FlowSensitive.cpp
+@@ -27,7 +27,6 @@
+  *      Author: Yulei Sui
+  */
+ 
+-#include "Util/Options.h"
+ #include "SVF-FE/DCHG.h"
+ #include "Util/SVFModule.h"
+ #include "Util/TypeBasedHeapCloning.h"
+@@ -35,6 +34,7 @@
+ #include "WPA/FlowSensitive.h"
+ #include "WPA/Andersen.h"
+ 
++static llvm::cl::opt<bool> CTirAliasEval("ctir-alias-eval", llvm::cl::init(false), llvm::cl::desc("Prints alias evaluation of ctir instructions in FS analyses"));
+ 
+ using namespace SVF;
+ using namespace SVFUtil;
+@@ -50,11 +50,7 @@ void FlowSensitive::initialize()
+ 
+     ander = AndersenWaveDiff::createAndersenWaveDiff(getPAG());
+     // When evaluating ctir aliases, we want the whole SVFG.
+-    if(Options::OPTSVFG)
+-        svfg = Options::CTirAliasEval ? memSSA.buildFullSVFG(ander) : memSSA.buildPTROnlySVFG(ander);
+-    else
+-        svfg = memSSA.buildPTROnlySVFGWithoutOPT(ander);
+-
++    svfg = CTirAliasEval ? memSSA.buildFullSVFG(ander) : memSSA.buildPTROnlySVFG(ander);
+     setGraph(svfg);
+     //AndersenWaveDiff::releaseAndersenWaveDiff();
+ 
+@@ -92,7 +88,7 @@ void FlowSensitive::analyze()
+     double end = stat->getClk(true);
+     solveTime += (end - start) / TIMEINTERVAL;
+ 
+-    if (Options::CTirAliasEval)
++    if (CTirAliasEval)
+     {
+         printCTirAliasStats();
+     }
+@@ -106,7 +102,7 @@ void FlowSensitive::analyze()
+  */
+ void FlowSensitive::finalize()
+ {
+-	if(Options::DumpVFG)
++	if(svfg->getDumpVFG())
+ 		svfg->dump("fs_solved", true);
+ 
+     NodeStack& nodeStack = WPASolver<SVFG*>::SCCDetect();
+diff --git a/lib/WPA/FlowSensitiveTBHC.cpp b/lib/WPA/FlowSensitiveTBHC.cpp
+index 4fc9db37..747d9616 100644
+--- a/lib/WPA/FlowSensitiveTBHC.cpp
++++ b/lib/WPA/FlowSensitiveTBHC.cpp
+@@ -7,7 +7,6 @@
+  *      Author: Mohamad Barbar
+  */
+ 
+-#include "Util/Options.h"
+ #include "SVF-FE/DCHG.h"
+ #include "SVF-FE/CPPUtil.h"
+ #include "WPA/FlowSensitiveTBHC.h"
+@@ -16,13 +15,17 @@
+ 
+ using namespace SVF;
+ 
++/// Whether we allow reuse for TBHC.
++static llvm::cl::opt<bool> TBHCStoreReuse("tbhc-store-reuse", llvm::cl::init(false), llvm::cl::desc("Allow for object reuse in at stores in FSTBHC"));
++static llvm::cl::opt<bool> TBHCAllReuse("tbhc-all-reuse", llvm::cl::init(false), llvm::cl::desc("Allow for object reuse everywhere in FSTBHC"));
++
+ FlowSensitiveTBHC::FlowSensitiveTBHC(PAG* _pag, PTATY type) : FlowSensitive(_pag, type), TypeBasedHeapCloning(this)
+ {
+     // Using `this` as the argument for TypeBasedHeapCloning is okay. As PointerAnalysis, it's
+     // already constructed. TypeBasedHeapCloning also doesn't use pta in the constructor so it
+     // just needs to be allocated, which it is.
+-    allReuse = Options::TBHCAllReuse;
+-    storeReuse = allReuse || Options::TBHCStoreReuse;
++    allReuse = TBHCAllReuse;
++    storeReuse = allReuse || TBHCStoreReuse;
+ }
+ 
+ void FlowSensitiveTBHC::analyze()
+@@ -275,7 +278,7 @@ bool FlowSensitiveTBHC::processGep(const GepSVFGNode* gep)
+     const DIType *tildet = getTypeFromCTirMetadata(gep);
+     if (tildet != undefType)
+     {
+-        bool reuse = Options::TBHCAllReuse || (Options::TBHCStoreReuse && !gepIsLoad(gep->getId()));
++        bool reuse = TBHCAllReuse || (TBHCStoreReuse && !gepIsLoad(gep->getId()));
+         changed = init(gep->getId(), q, tildet, reuse, true);
+     }
+ 
+@@ -370,7 +373,7 @@ bool FlowSensitiveTBHC::processLoad(const LoadSVFGNode* load)
+     const DIType *tildet = getTypeFromCTirMetadata(load);
+     if (tildet != undefType)
+     {
+-        changed = init(load->getId(), load->getPAGSrcNodeID(), tildet, Options::TBHCAllReuse);
++        changed = init(load->getId(), load->getPAGSrcNodeID(), tildet, TBHCAllReuse);
+     }
+ 
+     // We want to perform the initialisation for non-pointer nodes but not process the load.
+@@ -425,7 +428,7 @@ bool FlowSensitiveTBHC::processStore(const StoreSVFGNode* store)
+     const DIType *tildet = getTypeFromCTirMetadata(store);
+     if (tildet != undefType)
+     {
+-        changed = init(store->getId(), store->getPAGDstNodeID(), tildet, Options::TBHCAllReuse || Options::TBHCStoreReuse);
++        changed = init(store->getId(), store->getPAGDstNodeID(), tildet, TBHCAllReuse || TBHCStoreReuse);
+     }
+ 
+     // Like processLoad: we want to perform initialisation for non-pointers but not the store.
+diff --git a/lib/WPA/TypeAnalysis.cpp b/lib/WPA/TypeAnalysis.cpp
+index 180ee19e..5b189e23 100644
+--- a/lib/WPA/TypeAnalysis.cpp
++++ b/lib/WPA/TypeAnalysis.cpp
+@@ -27,7 +27,6 @@
+  *      Author: Yulei Sui
+  */
+ 
+-#include "Util/Options.h"
+ #include "SVF-FE/CPPUtil.h"
+ #include "SVF-FE/ICFGBuilder.h"
+ #include "SVF-FE/CHG.h"
+@@ -41,12 +40,13 @@ using namespace SVFUtil;
+ using namespace cppUtil;
+ using namespace std;
+ 
++llvm::cl::opt<bool> genICFG("genicfg", llvm::cl::init(true), llvm::cl::desc("Generate ICFG graph"));
+ 
+ /// Initialize analysis
+ void TypeAnalysis::initialize()
+ {
+ 	AndersenBase::initialize();
+-    if (Options::GenICFG)
++    if (genICFG)
+     {
+         icfg = PAG::getPAG()->getICFG();
+         icfg->dump("icfg_initial");
+diff --git a/lib/WPA/WPAPass.cpp b/lib/WPA/WPAPass.cpp
+index 2fa10f0b..a803ae1f 100644
+--- a/lib/WPA/WPAPass.cpp
++++ b/lib/WPA/WPAPass.cpp
+@@ -33,7 +33,6 @@
+  */
+ 
+ 
+-#include "Util/Options.h"
+ #include "Util/SVFModule.h"
+ #include "MemoryModel/PointerAnalysisImpl.h"
+ #include "WPA/WPAPass.h"
+@@ -51,7 +50,42 @@ using namespace SVF;
+ char WPAPass::ID = 0;
+ 
+ static llvm::RegisterPass<WPAPass> WHOLEPROGRAMPA("wpa",
+-        "Whole Program Pointer AnalysWPAis Pass");
++        "Whole Program Pointer Analysis Pass");
++
++/// register this into alias analysis group
++///static RegisterAnalysisGroup<AliasAnalysis> AA_GROUP(WHOLEPROGRAMPA);
++
++static llvm::cl::bits<PointerAnalysis::PTATY> PASelected(llvm::cl::desc("Select pointer analysis"),
++        llvm::cl::values(
++            clEnumValN(PointerAnalysis::Andersen_WPA, "nander", "Standard inclusion-based analysis"),
++            clEnumValN(PointerAnalysis::AndersenLCD_WPA, "lander", "Lazy cycle detection inclusion-based analysis"),
++            clEnumValN(PointerAnalysis::AndersenHCD_WPA, "hander", "Hybrid cycle detection inclusion-based analysis"),
++            clEnumValN(PointerAnalysis::AndersenHLCD_WPA, "hlander", "Hybrid lazy cycle detection inclusion-based analysis"),
++            clEnumValN(PointerAnalysis::AndersenSCD_WPA, "sander", "Selective cycle detection inclusion-based analysis"),
++            clEnumValN(PointerAnalysis::AndersenSFR_WPA, "sfrander", "Stride-based field representation includion-based analysis"),
++            clEnumValN(PointerAnalysis::AndersenWaveDiff_WPA, "wander", "Wave propagation inclusion-based analysis"),
++            clEnumValN(PointerAnalysis::AndersenWaveDiff_WPA, "ander", "Diff wave propagation inclusion-based analysis"),
++            clEnumValN(PointerAnalysis::Steensgaard_WPA, "steens", "Steensgaard's pointer analysis"),
++            // Disabled till further work is done.
++            // clEnumValN(PointerAnalysis::AndersenWaveDiffWithType_WPA, "andertype", "Diff wave propagation with type inclusion-based analysis"),
++            clEnumValN(PointerAnalysis::FSSPARSE_WPA, "fspta", "Sparse flow sensitive pointer analysis"),
++            clEnumValN(PointerAnalysis::FSTBHC_WPA, "fstbhc", "Sparse flow-sensitive type-based heap cloning pointer analysis"),
++            clEnumValN(PointerAnalysis::VFS_WPA, "vfspta", "Versioned sparse flow-sensitive points-to analysis"),
++            clEnumValN(PointerAnalysis::TypeCPP_WPA, "type", "Type-based fast analysis for Callgraph, PAG and CHA")
++        ));
++
++
++static llvm::cl::bits<WPAPass::AliasCheckRule> AliasRule(llvm::cl::desc("Select alias check rule"),
++        llvm::cl::values(
++            clEnumValN(WPAPass::Conservative, "conservative", "return MayAlias if any pta says alias"),
++            clEnumValN(WPAPass::Veto, "veto", "return NoAlias if any pta says no alias")
++        ));
++
++static llvm::cl::opt<bool> anderSVFG("svfg", llvm::cl::init(false),
++                                     llvm::cl::desc("Generate SVFG after Andersen's Analysis"));
++
++static llvm::cl::opt<bool> printAliases("print-aliases", llvm::cl::init(false),
++                                        llvm::cl::desc("Print results for all pair aliases"));
+ 
+ 
+ /*!
+@@ -76,7 +110,7 @@ void WPAPass::runOnModule(SVFModule* svfModule)
+ {
+     for (u32_t i = 0; i<= PointerAnalysis::Default_PTA; i++)
+     {
+-        if (Options::PASelected.isSet(i))
++        if (PASelected.isSet(i))
+             runPointerAnalysis(svfModule, i);
+     }
+     assert(!ptaVector.empty() && "No pointer analysis is specified.\n");
+@@ -149,17 +183,17 @@ void WPAPass::runPointerAnalysis(SVFModule* svfModule, u32_t kind)
+ 
+     ptaVector.push_back(_pta);
+     _pta->analyze();
+-    if (Options::AnderSVFG)
++    if (anderSVFG)
+     {
+         SVFGBuilder memSSA(true);
+         assert(SVFUtil::isa<AndersenBase>(_pta) && "supports only andersen/steensgaard for pre-computed SVFG");
+         SVFG *svfg = memSSA.buildFullSVFGWithoutOPT((BVDataPTAImpl*)_pta);
+         /// support mod-ref queries only for -ander
+-        if (Options::PASelected.isSet(PointerAnalysis::AndersenWaveDiff_WPA))
++        if (PASelected.isSet(PointerAnalysis::AndersenWaveDiff_WPA))
+             _svfg = svfg;
+     }
+ 
+-    if (Options::PrintAliases)
++    if (printAliases)
+         PrintAliasPairs(_pta);
+ }
+ 
+@@ -206,7 +240,7 @@ AliasResult WPAPass::alias(const Value* V1, const Value* V2)
+     if (pag->hasValueNode(V1) && pag->hasValueNode(V2))
+     {
+         /// Veto is used by default
+-        if (Options::AliasRule.getBits() == 0 || Options::AliasRule.isSet(Veto))
++        if (AliasRule.getBits() == 0 || AliasRule.isSet(Veto))
+         {
+             /// Return NoAlias if any PTA gives NoAlias result
+             result = llvm::MayAlias;
+@@ -218,7 +252,7 @@ AliasResult WPAPass::alias(const Value* V1, const Value* V2)
+                     result = llvm::NoAlias;
+             }
+         }
+-        else if (Options::AliasRule.isSet(Conservative))
++        else if (AliasRule.isSet(Conservative))
+         {
+             /// Return MayAlias if any PTA gives MayAlias result
+             result = llvm::NoAlias;
+@@ -240,7 +274,7 @@ AliasResult WPAPass::alias(const Value* V1, const Value* V2)
+  */
+ ModRefInfo WPAPass::getModRefInfo(const CallInst* callInst)
+ {
+-    assert(Options::PASelected.isSet(PointerAnalysis::AndersenWaveDiff_WPA) && Options::AnderSVFG && "mod-ref query is only support with -ander and -svfg turned on");
++    assert(PASelected.isSet(PointerAnalysis::AndersenWaveDiff_WPA) && anderSVFG && "mod-ref query is only support with -ander and -svfg turned on");
+     ICFG* icfg = _svfg->getPAG()->getICFG();
+     const CallBlockNode* cbn = icfg->getCallBlockNode(callInst);
+     return _svfg->getMSSA()->getMRGenerator()->getModRefInfo(cbn);
+@@ -251,7 +285,7 @@ ModRefInfo WPAPass::getModRefInfo(const CallInst* callInst)
+  */
+ ModRefInfo WPAPass::getModRefInfo(const CallInst* callInst, const Value* V)
+ {
+-    assert(Options::PASelected.isSet(PointerAnalysis::AndersenWaveDiff_WPA) && Options::AnderSVFG && "mod-ref query is only support with -ander and -svfg turned on");
++    assert(PASelected.isSet(PointerAnalysis::AndersenWaveDiff_WPA) && anderSVFG && "mod-ref query is only support with -ander and -svfg turned on");
+     ICFG* icfg = _svfg->getPAG()->getICFG();
+     const CallBlockNode* cbn = icfg->getCallBlockNode(callInst);
+     return _svfg->getMSSA()->getMRGenerator()->getModRefInfo(cbn, V);
+@@ -262,7 +296,7 @@ ModRefInfo WPAPass::getModRefInfo(const CallInst* callInst, const Value* V)
+  */
+ ModRefInfo WPAPass::getModRefInfo(const CallInst* callInst1, const CallInst* callInst2)
+ {
+-    assert(Options::PASelected.isSet(PointerAnalysis::AndersenWaveDiff_WPA) && Options::AnderSVFG && "mod-ref query is only support with -ander and -svfg turned on");
++    assert(PASelected.isSet(PointerAnalysis::AndersenWaveDiff_WPA) && anderSVFG && "mod-ref query is only support with -ander and -svfg turned on");
+     ICFG* icfg = _svfg->getPAG()->getICFG();
+     const CallBlockNode* cbn1 = icfg->getCallBlockNode(callInst1);
+     const CallBlockNode* cbn2 = icfg->getCallBlockNode(callInst2);

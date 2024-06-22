@@ -1,0 +1,66 @@
+diff --git a/llvm/lib/Transforms/Instrumentation/AddressSanitizer.cpp b/llvm/lib/Transforms/Instrumentation/AddressSanitizer.cpp
+index 79c119489a65..ae92a6941a3c 100644
+--- a/llvm/lib/Transforms/Instrumentation/AddressSanitizer.cpp
++++ b/llvm/lib/Transforms/Instrumentation/AddressSanitizer.cpp
+@@ -93,8 +93,7 @@ using namespace llvm;
+ static const uint64_t kDefaultShadowScale = 3;
+ static const uint64_t kDefaultShadowOffset32 = 1ULL << 29;
+ static const uint64_t kDefaultShadowOffset64 = 1ULL << 44;
+-static const uint64_t kDynamicShadowSentinel =
+-    std::numeric_limits<uint64_t>::max();
++static const uint64_t kDynamicShadowSentinel =std::numeric_limits<uint64_t>::max();
+ static const uint64_t kSmallX86_64ShadowOffsetBase = 0x7FFFFFFF;  // < 2G.
+ static const uint64_t kSmallX86_64ShadowOffsetAlignMask = ~0xFFFULL;
+ static const uint64_t kLinuxKasan_ShadowOffset64 = 0xdffffc0000000000;
+@@ -247,6 +246,7 @@ static cl::opt<int> ClMaxInsnsToInstrumentPerBB(
+ // This flag may need to be replaced with -f[no]asan-stack.
+ static cl::opt<bool> ClStack("asan-stack", cl::desc("Handle stack memory"),
+                              cl::Hidden, cl::init(true));
++
+ static cl::opt<uint32_t> ClMaxInlinePoisoningSize(
+     "asan-max-inline-poisoning-size",
+     cl::desc(
+@@ -319,6 +319,16 @@ static cl::opt<bool> ClSkipPromotableAllocas(
+     cl::desc("Do not instrument promotable allocas"), cl::Hidden,
+     cl::init(true));
+ 
++// OptiSan - Precise stack metadata
++// TODO - Maybe use the same option for checks ?
++static cl::opt<bool> ClPreciseStackMetadata(
++    "asan-precise-stack",
++    cl::desc("Only instrument specified allocas"), cl::Hidden,
++    cl::init(false));
++//TODO - Move this somwehre else (optisan)
++//#define ASAN_STACK_OBJECT "asanStackObj"
++
++
+ // These flags allow to change the shadow mapping.
+ // The shadow mapping looks like
+ //    Shadow = (Mem >> scale) + offset
+@@ -1032,10 +1042,17 @@ struct FunctionStackPoisoner : public InstVisitor<FunctionStackPoisoner> {
+     }
+ 
+     StackAlignment = std::max(StackAlignment, AI.getAlignment());
+-    if (!AI.isStaticAlloca())
+-      DynamicAllocaVec.push_back(&AI);
+-    else
+-      AllocaVec.push_back(&AI);
++
++    if(ClPreciseStackMetadata && (!AI.hasMetadata("asanStackObj")))
++    {
++        return;
++    }
++
++        if (!AI.isStaticAlloca())
++            DynamicAllocaVec.push_back(&AI);
++        else
++            AllocaVec.push_back(&AI);
++
+   }
+ 
+   /// Collect lifetime intrinsic calls to check for use-after-scope
+@@ -3331,3 +3348,4 @@ bool AddressSanitizer::isSafeAccess(ObjectSizeOffsetVisitor &ObjSizeVis,
+   return Offset >= 0 && Size >= uint64_t(Offset) &&
+          Size - uint64_t(Offset) >= TypeSize / 8;
+ }
++
