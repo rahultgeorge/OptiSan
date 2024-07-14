@@ -2,7 +2,7 @@
 The static analyses consists of 
 1. The value range analysis, from Dataguard,  to identify the spatial unsafe ptr arithmetic operations and the corresponding unsafe objects
 2. Static analysis to identify the unsafe memory accesses using the VR results
-3. Usable Target analysis which uses a PDG and SVF 
+3. Usable Target analysis which computes a PDG and uses point's to analysis (SVF)
 
 ## References
 1. [VR Source- Dataguard NDSS](https://github.com/Lightninghkm/DataGuard)

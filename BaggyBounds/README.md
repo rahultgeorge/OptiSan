@@ -7,7 +7,7 @@ Ported an earlier open source implementaiton of baggy bounds
 
 ## Pending/ Not currently supported
 1. GEPs with vector indices 
-2. Std Libraries  - Ideally use LLVM sanitizer like approach i.e. could integrate into LLVM's compiler-rt library
+2. Std Libraries  - Ideally use LLVM sanitizer like approach (intercept) i.e. could integrate into LLVM's compiler-rt library
 3. Original VR analysis not integrated
     
 

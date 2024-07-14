@@ -609,7 +609,7 @@ def main(argv)
   end  
 
   if ENV.key?($generate_profiling_info_env_name)
-    $generate_profiling_info = ENV[$generate_profiling_info_env_name]
+    $generate_profiling_info = true
     # puts "Compiler status: #{$compiler_state_env}"
   end  
 

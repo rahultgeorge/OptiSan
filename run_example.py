@@ -58,8 +58,8 @@ def run_pass_to_compute_usable_targets():
 
 def test_usable_target_analysis():
     print("     Computing usable targets, first need to compute unsafe operations using VR from prior work")
-    # 40 VR, 15 DBG ID, 40 Unsafe op, DBG ID  3, Target computaiton - 4hours
-    print("     ETA: 360 minutes")
+    # 40 VR, 15 DBG ID, 40 Unsafe op, DBG ID  3, Target computation - 4hours
+    print("     ETA: 660 minutes")
     # Computing unsafe operations is 40 minutes but for demo uncessary
     run_pass_to_compute_unsafe_operations()
     run_pass_to_compute_usable_targets()
@@ -83,6 +83,7 @@ def compute_defense_placement():
     print("Testing input generation for solver")
     monitoring_info.set_program_name("./example/xmllint")
     monitoring_info.generate_monitoring_info()
+    
     print("Testing solver, after matlab is invoked please run max_profit_main.m")
     subprocess.run(["matlab","-nodisplay","-nosplash","-nodesktop"])
 
