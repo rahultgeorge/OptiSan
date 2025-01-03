@@ -5,6 +5,6 @@ There are five components each of which includes a README : <br>
 2. [Cost Estimation](/CostEstimation/README.md) - to estimate cost of each defense using the execution profile (gcov) <br>
 3. [Formulation (MINLP)](/Formulation/README.md) (MATLAB  + Gurobi) solver - to solve the MINLP protection budget problem to compute placement for a desired budget <br>
 4. [Static Instrumentation pipeline](/Instrumentation/README.md) -  to instrument programs as computed<br>
-5. [Baggy bounds](/BaggyBounds/README.md)  - an open source LLVM based implementation
+5. [Baggy bounds](/BaggyBounds/README.md)  - an open source LLVM based Baggy Bounds implementation
 
 
